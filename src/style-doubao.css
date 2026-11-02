@@ -1,0 +1,165 @@
+/* Doubao account/profile manager and selected video-node controls. */
+.doubao-settings-body{flex:1;overflow:auto;padding:21px 17px 30px;color:#e8e8ec}
+.doubao-settings-heading h3{font-size:17px;margin:0 0 9px;font-weight:650}
+.doubao-settings-heading p{font-size:11px;line-height:1.9;color:#a1a2ab;margin:0 0 19px}
+.doubao-account-list{display:flex;flex-direction:column;gap:9px;margin-bottom:19px}
+.doubao-account-entry{background:#27282d;border:1px solid #45464d;border-radius:11px;overflow:hidden}
+.doubao-account-entry>.doubao-account-card{border:0;border-radius:0}
+.doubao-account-card{display:flex;align-items:center;gap:8px;background:#28292d;border:1px solid #45464d;border-radius:11px;padding:10px 9px}
+.doubao-account-icon{display:grid;place-items:center;background:#363745;width:34px;height:34px;border-radius:9px;color:#b6baf3}
+.doubao-account-details{min-width:0;flex:1;display:flex;flex-direction:column;gap:5px}
+.doubao-account-details strong{font-size:12px;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}
+.doubao-account-details small{display:flex;align-items:center;gap:4px;color:#a4aba9;font-size:9px}
+.doubao-account-details small svg{color:#97c3a6}
+.doubao-account-card>button{display:grid;place-items:center;width:27px;height:28px;color:#bdc0c8;background:transparent;border:0;border-radius:6px}
+.doubao-account-card>button:hover{background:#3e3f49;color:white}
+.doubao-account-card>.doubao-login-button{width:auto;display:flex;gap:4px;align-items:center;justify-content:center;padding:6px 8px;background:#424454;border:1px solid #606276;border-radius:7px;color:#edf0ff;font-size:10px;white-space:nowrap}
+.doubao-account-card>.doubao-login-button:hover{background:#585b75}
+.doubao-empty-accounts{font-size:11px;color:#9fa1ae;background:#28292f;border:1px dashed #535660;border-radius:10px;line-height:1.8;padding:18px;margin:0}
+.doubao-trace{display:flex;flex-direction:column;gap:5px;background:#222329;border:1px solid #434752;border-radius:10px;padding:12px;margin-bottom:17px}
+.doubao-trace-title{display:flex;align-items:center;gap:5px;margin-bottom:7px}
+.doubao-trace-title strong{font-size:11px;flex:1}
+.doubao-trace-title button{display:flex;gap:4px;align-items:center;background:#393c47;border:0;border-radius:6px;color:#dedfeb;padding:6px;font-size:10px}
+.doubao-trace-row{display:flex;align-items:center;gap:8px;font-size:10px;border-bottom:1px solid #353740;padding:6px 0}
+.doubao-trace-row span{color:#bfc4f7;min-width:36px;font-weight:650}
+.doubao-trace-row code{min-width:0;flex:1;overflow-wrap:anywhere;color:#b4b8c5}
+.doubao-trace-row small{font-size:10px;color:#b3d8bc}
+.doubao-trace>p{font-size:10px;line-height:1.8;color:#a2a4b1;margin:0}
+.doubao-form{display:flex;flex-direction:column;gap:13px;padding:15px;background:#242529;border:1px solid #3b3c43;border-radius:12px}
+.doubao-form h4{display:flex;align-items:center;gap:8px;margin:0;font-size:12px}
+.doubao-form label{display:flex;flex-direction:column;gap:7px;font-size:11px;color:#c5c7d0}
+.doubao-form input,.doubao-form textarea{width:100%;border:1px solid #4c4e58;background:#1b1c21;border-radius:8px;padding:10px;color:#eeeef2;font-size:11px;outline:0;resize:vertical}
+.doubao-form textarea{font-family:Consolas,monospace;font-size:10px;line-height:1.5}
+.doubao-form input:focus,.doubao-form textarea:focus{border-color:#9697c1}
+.doubao-create-account{border:0;border-radius:8px;background:#eeeef2;color:#222229;display:flex;align-items:center;justify-content:center;gap:8px;font-size:11px;font-weight:650;padding:11px}
+.doubao-create-account:disabled{opacity:.45}
+.doubao-note{display:flex;align-items:flex-start;gap:7px;color:#8f929e;font-size:10px;line-height:1.8;margin:0}
+.doubao-note svg{flex-shrink:0;margin-top:2px}
+.doubao-note code{color:#c0bded;word-break:break-all}
+.doubao-account-error,.doubao-account-message{font-size:11px;line-height:1.8;padding:10px 12px;margin-top:13px;border-radius:9px;background:#4a3034;color:#ffc1b9}
+.doubao-account-message{background:#2b3a31;color:#b6e2bd}
+.doubao-quick-settings{border:1px solid #444655;background:#373a48;color:#d3d5e1;border-radius:6px;font-size:11px;padding:9px 11px}
+.tn-video .floating-compose{width:746px}
+.tn-video .tn-compose-footer{flex-wrap:wrap;column-gap:7px;row-gap:5px}
+.tn-account-picker{position:relative;display:flex;align-items:center;gap:4px}
+.tn-account-picker>select{border:1px solid #464751;border-radius:7px;background:#34353b;color:#e8e8ef;max-width:141px;min-width:116px;padding:7px 5px;font-size:11px;outline:0}
+.tn-account-add{font-size:10px;background:#444652!important;color:#e1e3ed!important;border-radius:6px;padding:6px 7px}
+.tn-account-login{display:flex;align-items:center;gap:4px;background:#464958!important;border:1px solid #676b80!important;color:#eeeefb!important;border-radius:7px!important;padding:6px 8px!important;font-size:10px!important}
+.tn-account-login:hover{background:#5a5f76!important}
+.tn-node .tn-queued,.tn-node .tn-node-error{position:absolute;bottom:0;left:0;right:0;z-index:7;padding:8px 11px;font-size:11px;line-height:1.4;min-height:32px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:#252629e8;color:#dddff0}
+.tn-node .tn-node-error{background:#442b2eea;color:#ffd6d4;border-top:1px solid #835255}
+.tn-reference-tools{display:flex;align-items:center;gap:7px;min-height:25px;position:relative;font-size:10px;color:#9799a5}
+.tn-reference-chip{color:#d3d7ff;border:1px solid #656a80;border-radius:7px;background:#3e4050;padding:4px 7px;font-size:10px}
+.tn-reference-hint{color:#c6c7d1;border:1px solid #454750;background:#37383d;border-radius:7px;padding:4px 7px;font-size:10px}
+.tn-reference-tools button:hover{border-color:#bbbde8}
+.tn-reference-options{position:absolute;bottom:31px;left:0;width:275px;max-height:230px;overflow:auto;padding:7px;background:#313238;border:1px solid #575963;border-radius:10px;box-shadow:0 12px 35px #0009;z-index:30;display:flex;flex-direction:column;gap:4px}
+.tn-reference-options button{background:transparent;border:0;border-radius:7px;color:#eeeef5;display:flex;align-items:center;gap:9px;padding:9px 8px;text-align:left;font-size:11px}
+.tn-reference-options button:hover{background:#444652}
+.tn-reference-options button strong{white-space:nowrap;color:#c5c8ff}
+.tn-reference-options button span{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tn-reference-options button small{font-size:9px;color:#adbbbd}
+.tn-reference-options p{font-size:11px;line-height:1.6;color:#acafbb;padding:6px;margin:0}
+.tn-job-caption{color:#999dab;font-size:10px;line-height:1.5;padding-top:4px;max-height:38px;overflow:auto}
+@media(max-width:850px){.tn-video .floating-compose{width:min(746px,94vw)}.tn-video .tn-compose-footer{gap:4px}}
+
+/* Model selector: compact dark provider list, metadata chips and selection. */
+.tn-video-model-picker{position:relative;z-index:45}
+.tn-video-model-picker>button{max-width:185px;gap:7px!important;overflow:hidden;text-overflow:ellipsis;
+  background:#343437!important;border-radius:8px!important;padding:8px 10px!important}
+.tn-video-model-picker>button:hover{background:#444449!important}
+.tn-video-model-picker>button>.tn-model-symbol{flex-shrink:0}
+.tn-video-model-picker>button>svg:last-child{margin-left:auto}
+.tn-model-symbol{display:inline-flex;gap:2px;height:16px;align-items:center}
+.tn-model-symbol i{width:3px;border-radius:2px;background:currentColor;display:block}
+.tn-model-symbol i:nth-child(1){height:8px}.tn-model-symbol i:nth-child(2){height:15px}
+.tn-model-symbol i:nth-child(3){height:11px}
+.tn-video-model-menu.tn-dropdown{bottom:calc(100% + 10px);left:0;width:300px;min-width:300px;
+  max-height:min(445px,65vh);overflow-y:auto;overflow-x:hidden;display:flex;gap:3px;flex-direction:column;
+  padding:8px;background:#272729;border:1px solid #414145;border-radius:13px;
+  box-shadow:0 18px 55px #000c;z-index:1000;scrollbar-width:thin}
+.tn-video-model-menu:not(.tn-settings-closing){
+  animation:tn-settings-open .24s cubic-bezier(.16,.84,.32,1) both;
+  transform-origin:30% 100%;
+}
+.tn-video-model-menu.tn-settings-closing{
+  animation:tn-settings-close .22s cubic-bezier(.38,0,.75,1) both;
+  transform-origin:30% 100%;pointer-events:none;
+}
+.tn-video-model-menu.tn-dropdown>.tn-video-model-row{width:100%;padding:11px 10px 10px;min-height:50px;
+  display:flex;flex-direction:column;align-items:stretch;gap:7px;color:#e8e8ec;
+  border:0;border-radius:9px;background:transparent;text-align:left;white-space:normal;
+  cursor:pointer}
+.tn-video-model-menu.tn-dropdown>.tn-video-model-row:hover:not(:disabled){background:#38383c}
+.tn-video-model-menu.tn-dropdown>.tn-video-model-row.is-selected{background:#414144}
+.tn-model-row-top{display:flex;gap:8px;align-items:center;width:100%;min-width:0}
+.tn-model-brand-icon{width:19px;height:19px;display:grid;place-items:center;color:#aeb0b7;flex-shrink:0}
+.tn-model-row-name{font-size:12px;font-weight:630;flex:1;line-height:1.3}
+.tn-model-row-state{color:white;margin-left:auto}
+.tn-model-row-badges{display:flex;align-items:center;gap:5px;padding-left:27px}
+.tn-model-badge{display:inline-flex;align-items:center;gap:4px;border-radius:20px;
+  padding:4px 7px;background:#343437;color:#b7b9c0;font-size:10px;line-height:1}
+.tn-model-audio{padding:4px 7px}
+.tn-video .tn-node-frame video::-webkit-media-controls-picture-in-picture-button,
+.tn-video .tn-node-frame video::-webkit-media-controls-overlay-play-button{display:none!important}
+
+/* Muse/Doubao per-node provider selection. */
+.tn-provider-switch{display:flex;gap:2px;align-items:center;flex-shrink:0;
+  border:1px solid #484951;background:#2b2c32;padding:3px;border-radius:9px}
+.tn-compose-footer .tn-provider-switch button{border:0!important;border-radius:6px!important;
+  background:transparent!important;color:#a9abb5!important;white-space:nowrap;
+  font-size:11px!important;padding:6px 8px!important;transition:background .2s ease,color .2s ease}
+.tn-compose-footer .tn-provider-switch button.active{background:#505161!important;color:#fff!important}
+.tn-compose-footer .tn-provider-switch button:hover:not(.active){background:#3e3f49!important;color:#fff!important}
+.tn-image .tn-compose-footer:has(.tn-provider-switch){flex-wrap:wrap;row-gap:5px}
+
+/* Read-only quota hover panel on the left canvas rail. */
+.canvas-tools .muse-quota-control{position:relative;display:flex;justify-content:center;width:100%}
+.canvas-tools .muse-quota-trigger{color:#aeb6d8}
+.muse-quota-popover{pointer-events:none;position:absolute;z-index:80;
+  top:-90px;left:100%;width:306px;max-height:min(520px,75vh);
+  overflow:auto;padding:14px 14px 10px;color:#eef0f7;
+  border:1px solid #4c4f5d;border-radius:12px;background:#27282e;
+  box-shadow:0 18px 45px #000a;
+  opacity:0;visibility:hidden;transform:translateX(-5px);
+  transition:opacity .17s ease,transform .17s ease,visibility .17s}
+.muse-quota-control:hover .muse-quota-popover,
+.muse-quota-control:focus-within .muse-quota-popover{
+  pointer-events:auto;opacity:1;visibility:visible;transform:translateX(0)}
+.muse-quota-title{display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:12px;font-size:13px}
+.canvas-tools .muse-quota-refresh{width:25px;height:24px;border-radius:6px}
+.muse-quota-overview{display:flex;align-items:baseline;gap:7px;
+  border-radius:9px;padding:11px;background:#343741}
+.muse-quota-overview span{font-size:10px;color:#aeb6c8}
+.muse-quota-overview strong{font-size:21px;color:#b9e0c7;letter-spacing:-.4px}
+.muse-quota-overview small{margin-left:auto;font-size:10px;color:#b8bbc8}
+.muse-quota-meter{height:6px;border-radius:9px;background:#4b3d40;margin:9px 2px 4px;overflow:hidden}
+.muse-quota-meter span{display:block;height:100%;background:#72ae87;border-radius:inherit}
+.muse-quota-hint,.muse-quota-warning,.muse-quota-foot{font-size:10px;color:#a2a6b5;line-height:1.6;margin:7px 2px}
+.muse-quota-warning{color:#e7b98f}
+.muse-quota-foot{border-top:1px solid #43454d;margin-top:12px;padding-top:8px}
+.muse-quota-list{max-height:220px;overflow:auto}
+.muse-quota-account{display:flex;justify-content:space-between;gap:12px;
+  align-items:center;padding:9px 2px;border-bottom:1px solid #3b3d45}
+.muse-quota-account>span{font-size:11px;min-width:0;text-overflow:ellipsis;
+  white-space:nowrap;overflow:hidden}
+.muse-quota-account strong{flex-shrink:0;text-align:right;font-size:11px}
+.muse-quota-account small{display:block;font-size:9px;color:#9fa3ad;font-weight:400;margin-top:3px}
+.muse-quota-unavailable{color:#e0bd99}
+.muse-quota-empty{margin:10px 0;font-size:11px;color:#a5a8b6;line-height:1.6}
+
+/* Account provider switcher, shared by Doubao and Muse panels. */
+.tn-account-service-tabs{display:grid;grid-template-columns:1fr 1fr;gap:7px;
+  padding:11px 17px 0;flex:0 0 auto;background:#1c1c20}
+.tn-account-service-tabs button{border:1px solid #3d3e46;border-radius:9px;
+  background:#292a30;color:#b9bac5;padding:11px 7px;font-size:12px;cursor:pointer}
+.tn-account-service-tabs button.active{background:#414453;border-color:#69718c;
+  color:#fff;font-weight:650}
+.tn-account-service-tabs button:hover{background:#383a44;color:#fff}
+.tn-top-actions .tn-muse-account-link{display:flex;align-items:center;gap:6px;
+  width:auto;white-space:nowrap;padding:0 8px;color:#d1d7e8;font-size:11px}
+.tn-top-actions .tn-muse-account-link:hover{background:#414452;color:#fff}
+.muse-quota-popover .muse-quota-manage{display:block;width:100%;margin-top:8px;
+  padding:10px 8px;border:1px solid #6c7592;border-radius:8px;
+  color:#e8ebfc;background:#3b4152;font-size:11px;cursor:pointer}
+.muse-quota-popover .muse-quota-manage:hover{background:#4b5368}

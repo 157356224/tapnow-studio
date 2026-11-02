@@ -1,0 +1,402 @@
+/* Selection and marquee interactions are separate from intentional node edit. */
+.tn-node{
+  transition:width .65s cubic-bezier(.2,.75,.25,1);
+  animation:tn-node-grow .46s cubic-bezier(.17,.82,.27,1.08) both;
+  transform-origin:center center;
+}
+.tn-node.tn-node-exiting{
+  animation:tn-node-shrink .34s cubic-bezier(.65,0,.8,.25) forwards!important;
+  pointer-events:none!important;
+}
+@keyframes tn-node-grow{
+  0%{opacity:0;transform:scale(.72)}
+  68%{opacity:1}
+  100%{opacity:1;transform:scale(1)}
+}
+@keyframes tn-node-shrink{
+  from{opacity:1;transform:scale(1)}
+  to{opacity:0;transform:scale(.72)}
+}
+/* Tracking stays frame-synchronous while the pointer is in the exterior
+   magnet corridor. Only the return-to-rest position is eased. */
+/* The ring must occupy only its current pointer position. Animating the
+   visual itself produces the repeated afterimages seen during fast drags.
+   Keep the short reveal animation on its disc, never on the moving ring. */
+.tn-node .tn-port-visual,
+.tn-node .tn-port-visual.tn-magnet-return{
+  transition:none!important;
+  will-change:auto;
+  backface-visibility:hidden;
+}
+.tn-node .tn-port-disc{transition-duration:.2s,.16s,.16s}
+.tn-node .tn-port-disc:hover{filter:none!important}
+.floating-compose textarea.tn-compose-prompt{
+  box-sizing:border-box;
+  height:72px;
+  min-height:72px;
+  max-height:130px;
+  overflow-y:auto!important;
+  resize:none;
+  overscroll-behavior:contain;
+}
+.tn-node .tn-node-text{
+  overflow-y:auto!important;
+  overscroll-behavior:contain;
+}
+.inspector-body textarea{max-height:240px;overflow-y:auto;resize:vertical}
+.tn-node.tn-video{width:var(--tn-video-width,500px)}
+.tn-node.tn-image-natural{
+  width:var(--tn-image-width,324px);
+  transition:width .62s cubic-bezier(.2,.75,.25,1)
+}
+.tn-image-natural .tn-node-frame{
+  height:var(--tn-image-height,486px);
+  transition:height .62s cubic-bezier(.2,.75,.25,1),
+    border-color .2s ease,box-shadow .2s ease;
+}
+.tn-image-natural .tn-media{object-fit:contain}
+.tn-video .tn-node-frame{
+  height:var(--tn-video-height,282px);
+  transition:height .65s cubic-bezier(.2,.75,.25,1),border-color .3s ease,box-shadow .3s ease
+}
+/* One raster surface per active node, drawn off-main-thread by the shared
+   OffscreenCanvas worker. The browser compositor moves the cached layer when
+   the whole React Flow canvas pans, without reflowing hundreds of animated
+   pseudo-elements on the main thread. */
+.tn-node-frame .tn-generating-visual{
+  position:absolute;inset:0;z-index:6;overflow:hidden;
+  border-radius:inherit;background:#08090b;pointer-events:none;
+  isolation:isolate;contain:paint
+}
+.tn-generating-canvas{
+  display:block;width:100%;height:100%;
+  background:#08090b;pointer-events:none;
+}
+.tn-node-frame .tn-media.tn-media-reveal{
+  transform-origin:50% 50%;
+  animation:tn-generation-media-pop .78s cubic-bezier(.18,.88,.24,1) both
+}
+@keyframes tn-generation-media-pop{
+  0%{opacity:0;transform:scale(.12);filter:blur(12px)}
+  57%{opacity:1;transform:scale(1.06);filter:blur(0)}
+  78%{transform:scale(.985)}
+  100%{opacity:1;transform:scale(1);filter:none}
+}
+@media(prefers-reduced-motion:reduce){
+  .tn-node-frame .tn-media.tn-media-reveal{animation:none!important}
+}
+.tn-node-frame{transition-duration:.3s}
+.tn-toolbar{animation-duration:.36s}
+.tn-toolbar .tn-toolbar-download{
+  display:inline-flex;justify-content:center;align-items:center;
+  width:27px;height:29px;border-radius:7px;
+  color:#c7c9d0;text-decoration:none;flex:0 0 auto
+}
+.tn-toolbar .tn-toolbar-download:hover{color:#fff;background:#42434b}
+.floating-compose{animation-duration:.38s}
+.tn-upload-chip{transition-duration:.32s}
+.tn-port-disc{transition-duration:.2s,.16s,.16s}
+.tn-node .tn-port{transition:opacity .28s ease!important}
+.tn-node.tn-drop-target::before,.tn-node.tn-drop-target::after{animation-duration:1.8s}
+.floating-compose .tn-compose-prompt,
+.floating-compose .tn-compose-prompt:focus,
+.floating-compose .tn-compose-prompt:focus-visible,
+.floating-compose .tn-compose-editor:focus,
+.floating-compose .tn-compose-editor:focus-visible,
+.tn-node .tn-node-text:focus-visible{
+  outline:none!important;border-color:transparent!important;box-shadow:none!important
+}
+
+/* Compact video controls: only aspect ratio and duration. */
+.tn-video-settings-control{display:flex;position:relative;align-items:center}
+.tn-video-settings-toggle{display:flex;align-items:center;gap:6px;white-space:nowrap;padding:7px 8px!important;background:#333337!important;border-radius:8px!important;font-size:11px!important}
+.tn-video-settings-toggle:hover{background:#444448!important}
+.tn-video-settings{position:absolute;left:-65px;bottom:42px;width:320px;padding:13px 12px 14px;
+  background:#28282b;border:1px solid #414146;border-radius:15px;
+  box-shadow:0 16px 44px #000b;z-index:100;display:flex;flex-direction:column;gap:8px}
+.tn-video-settings:not(.tn-settings-closing){
+  animation:tn-settings-open .24s cubic-bezier(.16,.84,.32,1) both;
+  transform-origin:30% 100%;
+}
+.tn-video-settings.tn-settings-closing{
+  animation:tn-settings-close .22s cubic-bezier(.38,0,.75,1) both;
+  transform-origin:30% 100%;pointer-events:none;
+}
+@keyframes tn-settings-open{
+  from{opacity:0;transform:translateY(9px) scale(.95)}
+  to{opacity:1;transform:translateY(0) scale(1)}
+}
+@keyframes tn-settings-close{
+  from{opacity:1;transform:translateY(0) scale(1)}
+  to{opacity:0;transform:translateY(8px) scale(.955)}
+}
+.tn-video-setting-heading{color:#a4a4aa;font-size:11px;margin:2px 2px 0}
+.tn-video-ratios{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:3px;
+  background:#323235;border-radius:12px;padding:4px}
+.tn-video-ratios button{height:60px;min-width:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:6px;border-radius:10px!important;
+  color:#99999e!important;background:transparent!important;font-size:10px!important;padding:4px 0!important}
+.tn-video-ratios button.active{color:#f2f2f5!important;background:#454548!important}
+.tn-video-ratios button:hover{background:#424246!important;color:#fff!important}
+.tn-video-ratios button small{font-size:10px}
+.tn-ratio-icon{display:block;width:22px;max-height:19px;min-height:9px;border:1.6px solid currentColor;border-radius:2px}
+.tn-video-ratios button:nth-child(3) .tn-ratio-icon{width:15px}
+.tn-video-ratios button:nth-child(4) .tn-ratio-icon{width:13px}
+.tn-video-ratios button:nth-child(5) .tn-ratio-icon{width:10px}
+.tn-video-durations{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:1px;
+  padding:4px 2px;background:#323235;border-radius:12px}
+.tn-video-durations button{height:32px;min-width:0;padding:2px 0!important;
+  color:#89898e!important;font-size:11px!important;border-radius:7px!important}
+.tn-video-durations button.active{color:#fff!important;background:#49494d!important;font-weight:700}
+.tn-video-durations button:hover{color:#f3f3f5!important}
+.tn-image-settings{width:330px}
+.tn-image-ratios{grid-template-columns:repeat(7,minmax(0,1fr))}
+.tn-image-ratios button{height:60px}
+.tn-image-ratios button:nth-child(7) .tn-ratio-icon{width:12px}
+.tn-image-resolutions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:4px;padding:4px;background:#323235;border-radius:12px}
+.tn-image-resolutions button{height:36px;min-width:0;padding:3px 0!important;
+  border-radius:8px!important;background:transparent!important;
+  color:#a7a7ae!important;font-size:11px!important;
+  transition:background .15s ease,color .15s ease,transform .15s ease}
+.tn-image-resolutions button.active{background:#49494d!important;
+  color:#fff!important;font-weight:700}
+.tn-image-resolutions button:hover{background:#424246!important;
+  color:#fff!important}
+.tn-image-resolutions button:active{transform:scale(.96)}
+
+/* Reference tray: image thumbnails, dismissible chips, popup gallery. */
+.tn-rich-prompt{position:relative;display:flex;flex-direction:column;gap:6px;min-height:110px}
+.tn-ref-attachments{min-height:40px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;position:relative}
+.tn-ref-attach-add{height:35px;width:35px;flex:0 0 35px;position:relative;background:#353538!important;border:0!important;
+  border-radius:10px!important;display:grid;place-items:center;color:#d0d0d4!important;box-shadow:none!important}
+.tn-ref-attach-add:hover:not(:disabled){background:#46464b!important;color:white!important}
+.tn-ref-attachment{width:32px;height:37px;flex:0 0 32px;border-radius:9px;position:relative;isolation:isolate;
+  background:transparent;border:0;box-shadow:none;cursor:pointer}
+.tn-ref-attachment .tn-ref-thumbnail{display:grid;place-items:center;
+  width:100%;height:100%;padding:0!important;border:0!important;
+  border-radius:9px!important;overflow:hidden;background:#38383e!important;
+  color:#888b9c!important;cursor:pointer}
+.tn-ref-attachment .tn-ref-thumbnail:disabled{cursor:not-allowed}
+.tn-ref-attachment .tn-ref-thumbnail img{
+  height:100%;width:100%;object-fit:cover;border-radius:9px;display:block}
+.tn-ref-attachment.tn-ref-cited .tn-ref-thumbnail{
+  outline:2px solid #869bd8;outline-offset:1px}
+.tn-ref-attachment .tn-ref-attachment-label{bottom:0;left:0;right:0;
+  pointer-events:none;z-index:1}
+.tn-ref-attachment .tn-ref-move-controls{
+  display:flex;position:absolute;top:0;bottom:auto;left:0;right:0;z-index:2;
+  height:14px;opacity:0;transition:opacity .13s;
+  background:#16171bcc;border-radius:9px 9px 0 0}
+.tn-ref-attachment:hover .tn-ref-move-controls,
+.tn-ref-attachment:focus-within .tn-ref-move-controls{opacity:1}
+.tn-ref-attachment .tn-ref-move-controls button{
+  width:50%;height:14px;padding:0!important;color:#fff!important;
+  display:grid;place-items:center;background:transparent!important;border:0!important}
+.tn-ref-attachment .tn-ref-move-controls button:disabled{opacity:.23}
+.tn-ref-attachment .tn-ref-move-controls button:hover:not(:disabled){
+  background:#6271a9!important}
+.tn-ref-attachment-count{font-size:11px;color:#83838a;white-space:nowrap}
+.tn-ref-attachment-label{position:absolute;bottom:0;left:0;right:0;display:block;
+  border-radius:0 0 7px 7px;color:#fff;background:linear-gradient(transparent,#000b);font-size:8px;
+  text-shadow:0 1px 2px black;text-align:center;padding:4px 0 1px}
+.tn-ref-attachment-remove{position:absolute;right:-6px;top:-6px;width:18px;height:18px;
+  border-radius:50%!important;background:#222!important;color:#fff!important;display:grid;place-items:center;
+  padding:0!important}
+.tn-ref-floating-preview{width:82px;padding:0;border-radius:10px;background:transparent;border:0;
+  box-shadow:none;pointer-events:none;z-index:120;overflow:hidden;
+  animation:tn-ref-preview-enter .3s cubic-bezier(.18,.83,.28,1.12) both;transform-origin:50% 100%}
+.tn-ref-floating-preview img{display:block;width:100%;max-height:117px;
+  object-fit:cover;border-radius:10px}
+.tn-ref-preview-caption{position:absolute;bottom:0;left:0;right:0;
+  color:#f5f5f5;font-size:11px;font-weight:650;text-align:center;padding:14px 0 4px;
+  text-shadow:0 1px 5px #0009;background:linear-gradient(transparent,#0008)}
+@keyframes tn-ref-preview-enter{
+  0%{opacity:0;transform:translateY(10px) scale(.88)}
+  65%{opacity:1}
+  100%{opacity:1;transform:translateY(0) scale(1)}
+}
+.tn-ref-hover-preview small{font-size:10px;padding:4px;display:block;color:#b9b9bf;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tn-ref-attach-add:disabled{opacity:.46;cursor:not-allowed!important}
+.tn-ref-gallery{position:absolute;bottom:calc(100% + 12px);left:0;width:320px;max-height:300px;overflow:auto;
+  background:#262629!important;border:1px solid #37373c;border-radius:14px;padding:9px;
+  box-shadow:0 18px 45px #0009;z-index:150;display:flex;flex-direction:column;gap:6px;
+  animation:tn-ref-gallery-enter .23s cubic-bezier(.2,.9,.25,1) both;transform-origin:18px 100%}
+@keyframes tn-ref-gallery-enter{
+  from{opacity:0;transform:translateY(8px) scale(.965)}
+  to{opacity:1;transform:translateY(0) scale(1)}
+}
+.tn-ref-gallery-search{display:flex;align-items:center;gap:8px;height:32px;
+  background:#3c3c40!important;border-radius:9px;padding:0 10px;color:#8b8b91}
+.tn-ref-gallery-search input{background:transparent;border:0!important;outline:0!important;
+  box-shadow:none!important;color:#e8e8ec;font-size:12px;flex:1;min-width:0}
+.tn-ref-gallery-search input::placeholder{color:#85858b}
+.tn-ref-gallery-heading{display:flex;justify-content:space-between;align-items:center;
+  padding:2px 4px 0;color:#9caac1;font-size:11px;font-weight:520}
+.tn-ref-gallery-heading span:last-child{font-size:10px;color:#737d8c;font-weight:400}
+.tn-ref-gallery-item{display:flex!important;align-items:center!important;gap:9px!important;
+  border-radius:8px!important;padding:5px 8px!important;
+  border:1px solid #424246!important;background:#3b3b3f!important;
+  color:#dddde0!important;text-align:left;height:39px}
+.tn-ref-gallery-item:hover,.tn-ref-gallery-item:focus-visible{
+  background:#48484d!important;border-color:#55555a!important;color:#f5f5f7!important}
+.tn-ref-gallery-item:focus{outline:0!important;box-shadow:none!important}
+.tn-ref-gallery-item::before,.tn-ref-gallery-item::after{display:none!important}
+
+/* The wire lives behind the whole card, including the image and its
+   caption, even when a selected source has an illuminated connection. */
+.tn-app-shell .react-flow__edges{z-index:0!important}
+.tn-app-shell .react-flow__nodes{z-index:2!important}
+.tn-app-shell .react-flow__node{z-index:2!important}
+.tn-app-shell .react-flow__node.selected{z-index:3!important}
+
+/* After the travelling blue pulse reaches its destination, continue a
+   diffused segment along that node's border. Kept to a masked 2px rim. */
+@property --tn-rim-angle{
+  syntax:"<angle>";
+  inherits:false;
+  initial-value:0deg;
+}
+.tn-node.tn-flow-target .tn-node-frame::before{
+  content:"";position:absolute;inset:0;padding:2.5px;
+  border-radius:inherit;pointer-events:none;z-index:9;
+  background:conic-gradient(from var(--tn-rim-angle),
+    transparent 0 69%,rgba(50,148,255,.03) 76%,
+    rgba(81,171,255,.26) 84%,rgba(161,222,255,.85) 90%,
+    rgba(84,172,255,.28) 95%,transparent 100%);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+  -webkit-mask-composite:xor;mask-composite:exclude;
+  animation:tn-flow-rim 4.7s linear infinite;
+  animation-delay:-2.7s;
+  filter:blur(1.3px);
+}
+/* Compact node-extension chooser: three actions only, as in the reference.
+   The chooser inherits the dark canvas rather than an editor toolbar. */
+.tn-app-shell .tn-node-add-popover{
+  width:286px;
+  padding:9px;
+  background:#1d1d1f;
+  border:1px solid #3a3a3f;
+  border-radius:16px;
+  box-shadow:0 18px 48px #000b;
+  animation:tn-settings-open .22s cubic-bezier(.16,.84,.32,1) both;
+}
+.tn-node-add-popover .popover-heading{
+  padding:7px 5px 10px;
+  color:#8a8a8f;
+  font-size:13px;
+  font-weight:500;
+}
+.tn-node-add-popover .popover-tools{gap:3px}
+.tn-node-add-popover .popover-tools button{
+  min-height:51px;
+  padding:8px 7px;
+  border-radius:11px;
+  color:#e5e5e7;
+  background:transparent;
+}
+.tn-node-add-popover .popover-tools button:hover,
+.tn-node-add-popover .popover-tools button:focus-visible{
+  background:#303034;
+}
+.tn-node-add-popover .popover-tools strong{font-size:13px;font-weight:600}
+.tn-node-add-popover .popover-tools small{font-size:11px;color:#77777d}
+.tn-node-add-popover .tool-list-icon{
+  width:35px;height:35px;background:#303034;color:#c9c9cc;
+}
+@keyframes tn-flow-rim{
+  from{--tn-rim-angle:0deg}
+  to{--tn-rim-angle:360deg}
+}
+.tn-ref-gallery-item img{width:26px;height:29px;flex:0 0 26px;object-fit:cover;border-radius:5px}
+.tn-ref-gallery-item span{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tn-ref-gallery-item small{color:#d6e4ff;font-size:11px}
+.tn-ref-gallery-kind{color:#a7abb4;flex:0 0 13px}
+.tn-ref-gallery p{color:#a9a9ae;font-size:11px;padding:5px}
+
+/* Native contenteditable retains IME candidate windows, while references are
+   atomic noneditable spans that appear inline and preview on hover. */
+.tn-compose-editor{min-height:71px;white-space:pre-wrap;overflow-wrap:anywhere;
+  color:#ececf0;font-size:13px;line-height:1.95;cursor:text;
+  user-select:text;-webkit-user-select:text;padding:4px 1px!important;
+  max-height:130px;overflow-y:auto!important;overscroll-behavior:contain}
+.tn-compose-editor:empty:before{content:attr(data-placeholder);color:#76767c;pointer-events:none}
+.tn-inline-ref{display:inline-flex;align-items:center;vertical-align:middle;max-height:22px;gap:4px;
+  background:#3b3b3f;border:1px solid #55555d;border-radius:6px;padding:2px 5px 2px 2px;
+  color:#d6d6e3;font-size:11px;line-height:16px;user-select:all;white-space:nowrap;cursor:pointer}
+.tn-inline-ref-icon{position:relative;display:inline-flex;width:15px;height:15px;flex:0 0 15px;align-items:center;justify-content:center}
+.tn-inline-ref-icon img{display:block;width:15px;height:15px;object-fit:cover;border-radius:3px}
+.tn-inline-ref-x{display:none;position:absolute;inset:0;align-items:center;justify-content:center;
+  font-size:18px;font-weight:500;line-height:1;color:#f3f3f6}
+.tn-inline-ref:hover .tn-inline-ref-x{display:flex}
+.tn-inline-ref:hover .tn-inline-ref-icon img{opacity:0}
+.tn-inline-ref:hover{background:#48484e;border-color:#8c8c93}
+.tn-compose-footer{margin-top:2px}
+.tn-video .floating-compose{width:690px}
+.tn-video .tn-compose-footer{flex-wrap:wrap}
+
+/* One seamless tapered gradient silhouette per light. The duplicate blurred
+   silhouette is its soft aura, not another dashed segment. */
+.tn-blue-flow,.tn-blue-flow-droplet{pointer-events:none}
+.tn-blue-flow-body{
+  opacity:.98;
+  filter:drop-shadow(0 0 3.5px #67c9ff)
+}
+.tn-blue-flow-aura{
+  opacity:.45;
+  filter:blur(7px)
+}
+
+/* Hold C to turn the connection hover into an edge-cutting cursor. The edge
+   retains the SVG hit target; the cursor overlay must never intercept clicks. */
+.tn-cut-mode .react-flow__edge:hover,
+.tn-cut-mode .react-flow__edge:hover *{
+  cursor:none!important;
+}
+.tn-cut-mode .react-flow__edge .react-flow__edge-interaction{
+  stroke-width:20px;
+}
+.tn-edge-cut-cursor{
+  position:fixed;left:0;top:0;z-index:3000;
+  display:grid;place-items:center;width:32px;height:32px;
+  transform:translate(-50%,-50%);
+  border:1px solid #74777e;border-radius:50%;
+  background:#242528;color:#f4f5f7;box-shadow:0 2px 10px #000b;
+  pointer-events:none;
+}
+
+/* Keep NodeToolbar mounted until the reverse animation finishes. React Flow's
+   instant selection hide is overridden only for intentional focus changes;
+   marquee or drag still dismisses the editor immediately. */
+.tn-toolbar:not(.tn-editor-closing){
+  animation:tn-toolbar-enter .4s cubic-bezier(.16,.86,.27,1) both!important
+}
+.floating-compose:not(.tn-editor-closing){
+  animation:tn-compose-enter .43s cubic-bezier(.16,.86,.27,1) both!important
+}
+.tn-toolbar.tn-editor-closing,.floating-compose.tn-editor-closing{
+  animation:tn-editor-hide .4s cubic-bezier(.34,0,.72,1) forwards!important;
+  pointer-events:none!important
+}
+@keyframes tn-editor-hide{
+  from{opacity:1;transform:translateY(0) scale(1)}
+  to{opacity:0;transform:translateY(-14px) scale(.972)}
+}
+
+@media(max-width:760px){
+  .tn-video .floating-compose{width:min(690px,94vw)}
+  .tn-video-settings{left:-100px;max-width:calc(96vw - 30px)}
+}
+@media(prefers-reduced-motion:reduce){
+  .tn-node,.tn-node .tn-node-frame{transition:none}
+  .tn-node,.tn-node.tn-node-exiting{animation:none!important}
+  /* Motion along SVG paths is SMIL, not a CSS animation: hide the effect
+     entirely when system reduced-motion mode is enabled. */
+  .tn-blue-flow{display:none!important}
+  .tn-toolbar,.floating-compose,
+  .tn-ref-floating-preview,.tn-ref-gallery,.tn-video-settings,
+  .tn-node.tn-flow-target .tn-node-frame::before{
+    animation:none!important
+  }
+}
