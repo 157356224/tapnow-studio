@@ -192,34 +192,62 @@ try{
   assert.equal(project.nodes.find(node=>node.id==='image-target').data.referenceOrder.join(','),
     'b,a','Image reference ordering should persist');
 
-  // Screenshot requirement: the left and right magnetic "+" buttons track
-  // the pointer only within the central ~18%-78% of the actual media frame.
-  // Check a video, a square image, and the same image after changing to 21:9.
+  // Screenshot red rectangle: the circle stays completely within a 100px
+  // exterior corridor at 26%-73% of the media frame, at any canvas zoom.
+  // Check both sides before and after the image aspect-ratio changes.
   async function verifyPortBand(node,side){
     const frame=await node.locator('.tn-node-frame').boundingBox();
     assert.ok(frame,'Node frame is available for magnetic port testing');
-    const x=side==='in'?frame.x-56:frame.x+frame.width+56;
+    const scale=await node.locator('.tn-node').evaluate(el=>
+      el.getBoundingClientRect().width/el.offsetWidth);
+    const edge=side==='in'?frame.x:frame.x+frame.width;
+    const x=side==='in'?edge-56*scale:edge+56*scale;
     const port=node.locator('.tn-port-'+side+' .tn-port-visual');
-    const getCenter=async()=>{
+    const getBox=async()=>{
       const box=await port.boundingBox();
       assert.ok(box);
-      return box.y+box.height/2;
+      return box;
     };
-    await page.mouse.move(x,frame.y+4);
+    const topBound=frame.y+frame.height*.26;
+    const bottomBound=frame.y+frame.height*.73;
+    await page.mouse.move(x,topBound+2*scale);
     await page.waitForTimeout(110);
-    const top=await getCenter();
-    assert.ok(Math.abs(top-(frame.y+frame.height*.18))<9,
-      side+' port must stop near the top of the marked center strip '+
-      JSON.stringify({top,expected:frame.y+frame.height*.18,frame,
+    const top=await getBox();
+    assert.ok(Math.abs(top.y-topBound)<9,
+      side+' port must stop at the top edge of the marked rectangle '+
+      JSON.stringify({top,expected:topBound,frame,
         translate:await port.evaluate(el=>el.style.translate),
         nodeClass:await node.locator('.tn-node').getAttribute('class')}));
-    await page.mouse.move(x,frame.y+frame.height-4);
+    await page.mouse.move(x,bottomBound-2*scale);
     await page.waitForTimeout(110);
-    const bottom=await getCenter();
-    assert.ok(Math.abs(bottom-(frame.y+frame.height*.78))<9,
-      side+' port must stop near the bottom of the marked center strip');
-    assert.ok(bottom-top>frame.height*.52,
-      'Magnetic port must still follow the cursor within its permitted strip');
+    const bottom=await getBox();
+    assert.ok(Math.abs(bottom.y+bottom.height-bottomBound)<9,
+      side+' port must stop at the bottom edge of the marked rectangle');
+    assert.ok(bottom.y-top.y>frame.height*.23,
+      'Magnetic port must follow within the restricted vertical rectangle at all aspect ratios');
+    const midY=(topBound+bottomBound)/2;
+    const innerX=side==='in'?edge-26*scale:edge+26*scale;
+    const outerX=side==='in'?edge-92*scale:edge+92*scale;
+    await page.mouse.move(innerX,midY);
+    await page.waitForTimeout(90);
+    const inner=await getBox();
+    await page.mouse.move(outerX,midY);
+    await page.waitForTimeout(90);
+    const outer=await getBox();
+    const limitMin=side==='in'?edge-100*scale:edge+3*scale;
+    const limitMax=side==='in'?edge-3*scale:edge+100*scale;
+    for(const box of [inner,outer]){
+      assert.ok(box.x>=limitMin-9&&box.x+box.width<=limitMax+9,
+        'Entire plus circle must remain inside the marked horizontal corridor');
+    }
+    assert.ok(Math.abs(outer.x-inner.x)>35*scale,
+      'Plus circle should follow horizontally within the marked rectangle');
+    const beyondX=side==='in'?edge-112*scale:edge+112*scale;
+    await page.mouse.move(beyondX,midY);
+    await page.waitForTimeout(110);
+    assert.equal(await node.locator('.tn-node').evaluate((el,s)=>
+      el.classList.contains('tn-near-'+s),side==='in'?'left':'right'),false,
+      'Plus magnet must switch off beyond the red rectangle');
   }
   for(const side of ['in','out'])await verifyPortBand(imageTarget,side);
   await imageTarget.locator('.tn-node-frame').click();
@@ -230,7 +258,7 @@ try{
   for(const side of ['in','out'])await verifyPortBand(imageTarget,side);
 
   assert.deepEqual(errors,[],'Browser must not report JavaScript errors');
-  console.log('PASS: ordered reference thumbnails, persisted @ refs and central 18%-78% magnetic port follow band on image/video nodes at multiple ratios');
+  console.log('PASS: ordered references and both plus circles constrained to the screenshot 100px x 26%-73% red rectangle at multiple image ratios');
 }finally{
   await browser.close();
 }

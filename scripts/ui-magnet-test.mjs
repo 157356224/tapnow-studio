@@ -76,26 +76,26 @@ try {
   // A rapid cursor movement should reposition the ring within a single
   // rendering frame, without a delayed CSS transition catching up.
   const outsideX=cardRect.x+cardRect.width+47;
-  await page.mouse.move(outsideX,cardRect.y+cardRect.height*.28);
+  await page.mouse.move(outsideX,cardRect.y+cardRect.height*.31);
   await page.waitForTimeout(35);
   const upper=await visual.boundingBox();
-  await page.mouse.move(outsideX,cardRect.y+cardRect.height*.76);
+  await page.mouse.move(outsideX,cardRect.y+cardRect.height*.68);
   await page.waitForTimeout(35);
   const lower=await visual.boundingBox();
-  assert.ok(lower.y-upper.y>90,'Magnet must track large cursor movements without easing lag');
-  // The ring must also follow across the full external horizontal corridor,
-  // including well beyond its original 46px rest position.
+  assert.ok(lower.y-upper.y>cardRect.height*.2,
+    'Magnet must track cursor movements within the narrower screenshot rectangle');
+  // Constrain horizontal following to the new screenshot red rectangle.
   const rightY=cardRect.y+cardRect.height*.52;
   await page.mouse.move(cardRect.x+cardRect.width+50,rightY);
   await page.waitForTimeout(40);
   const innerX=await visual.boundingBox();
-  await page.mouse.move(cardRect.x+cardRect.width+113,rightY);
+  await page.mouse.move(cardRect.x+cardRect.width+84,rightY);
   await page.waitForTimeout(40);
   const outerX=await visual.boundingBox();
-  assert.ok(outerX.x-innerX.x>45,
-    'Magnet circle must track the cursor horizontally until the adjacent node is closer');
+  assert.ok(outerX.x-innerX.x>25,
+    'Magnet circle must track the cursor horizontally inside the red rectangle');
   assert.equal(await text.evaluate(el=>el.classList.contains('tn-near-right')),true,
-    'Right magnet remains active far outside the node, past its resting location');
+    'Right magnet remains active inside the allowed rectangle');
   await page.mouse.move(cardRect.x+cardRect.width-2,rightY);
   await page.waitForTimeout(310);
   assert.ok(['0px','0px 0px'].includes(await visual.evaluate(el=>el.style.translate)),
@@ -113,12 +113,12 @@ try {
   assert.equal(await other.evaluate(el=>el.classList.contains('tn-near-right')),true,
     'An UNSELECTED node should reveal its plus 50px before reaching its edge');
   assert.ok((await other.locator('.tn-port-out').evaluate(el=>Number(getComputedStyle(el).opacity)))>.9);
-  await page.mouse.move(otherBox.x+otherBox.width+83,otherBox.y+otherBox.height*.65,{steps:5});
+  await page.mouse.move(otherBox.x+otherBox.width+83,otherBox.y+otherBox.height*.52,{steps:5});
   assert.equal(await other.evaluate(el=>el.classList.contains('tn-near-right')),true,
     'Magnetic range must remain active at 83px past the edge');
-  await page.mouse.move(otherBox.x+otherBox.width+188,otherBox.y+otherBox.height*.65,{steps:5});
+  await page.mouse.move(otherBox.x+otherBox.width+112,otherBox.y+otherBox.height*.52,{steps:5});
   assert.equal(await other.evaluate(el=>el.classList.contains('tn-near-right')),false,
-    'Magnetic range must stop past the extended 174px exterior zone');
+    'Magnetic range must stop outside the marked 100px exterior rectangle');
   await page.mouse.move(cardRect.x+cardRect.width+47,rightY);
   await page.waitForTimeout(100);
   await page.screenshot({path:path.join(output,'tapnow-magnet-hover.png'),fullPage:true});

@@ -63,27 +63,34 @@ function flushMagnetFrame() {
     if(box.right<-175||box.left>window.innerWidth+175||
        box.bottom<-175||box.top>window.innerHeight+175)continue;
     const scale=box.width/geometry.width;
-    // The entire exterior corridor is magnetic, including the area beyond
-    // the circle's resting position. Its own hit target moves with the cursor.
-    const range=174*scale;
+    // Keep the magnetic "+" inside the narrow rectangle marked beside the
+    // card: ~100 CSS px wide, covering only the middle 26%-73% of the media
+    // frame. React Flow zoom is already included in the measured scale.
+    const range=100*scale;
     const restingGap=46*scale;
-    const edgeReset=6*scale;
+    const edgeReset=3*scale;
     const frameTop=box.top+27*scale;
-    const vertical=pointer.y>=frameTop-22*scale && pointer.y<=box.bottom+22*scale;
+    const frameHeight=box.bottom-frameTop;
+    const stripTop=frameTop+frameHeight*.26;
+    const stripBottom=frameTop+frameHeight*.73;
+    const vertical=pointer.y>=stripTop&&pointer.y<=stripBottom;
     const nearLeft=vertical && pointer.x<box.left-edgeReset && pointer.x>=box.left-range;
     const nearRight=vertical && pointer.x>box.right+edgeReset && pointer.x<=box.right+range;
     const previous=magnetState.get(el);
     if(!nearLeft&&!nearRight&&!previous?.left&&!previous?.right)continue;
-    const frameHeight=box.bottom-frameTop;
     const center=frameTop+frameHeight/2;
-    // Keep both "+" rings in the middle strip of the media frame, as in
-    // the canvas reference (roughly 18% to 78% of its height). The bounds
-    // scale with image/video aspect-ratio changes and React Flow zoom.
-    const minY=frameTop+frameHeight*.18;
-    const maxY=frameTop+frameHeight*.78;
+    // Clamp the *whole circle* inside the rectangle, not just its centre.
+    const ringInset=Math.min(16*scale,(stripBottom-stripTop)/2);
+    const minY=stripTop+ringInset;
+    const maxY=stripBottom-ringInset;
     const followY=(Math.max(minY,Math.min(maxY,pointer.y))-center)/scale;
-    const fromCenter=nearLeft?pointer.x-(box.left-restingGap):pointer.x-(box.right+restingGap);
-    const followX=Math.max(-range/scale+restingGap/scale,Math.min(range/scale-restingGap/scale,fromCenter/scale));
+    const horizontalDistance=(nearLeft?box.left-pointer.x:pointer.x-box.right)/scale;
+    // The screenshot rectangle starts ~3 CSS px outside the node border.
+    // With a 32px ring, 19px is the minimum centre-to-border distance.
+    const boundedDistance=Math.max(19,Math.min(range/scale-16,horizontalDistance));
+    const followX=nearLeft
+      ?restingGap/scale-boundedDistance
+      :boundedDistance-restingGap/scale;
     updates.push({
       el,left:nearLeft,right:nearRight,x:followX,y:followY,
       distance:nearLeft?box.left-pointer.x:nearRight?pointer.x-box.right:Infinity
