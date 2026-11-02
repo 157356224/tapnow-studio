@@ -136,17 +136,17 @@ Muse 支持纯文字以及连接图片节点后按 @ 引用进行参考生图/�
 - 未实现 TapNow 的高阶图片局部重绘、视频剪辑与重打光、3D 预演、实时多人协作、账户系统。
 - 当前为高还原设计与核心业务原型，不代表 TapNow 官方代码或逐像素完整复刻。
 
-## GitHub 私有仓库与启动增量更新
+## GitHub 公开仓库与启动增量更新
 
 Windows 首次使用需要安装 Node.js 22.12+（推荐 24 LTS）、Git 和 Microsoft Edge。
-从自己的 GitHub 私有仓库克隆项目后，直接双击 `start.bat`：
+从公开 GitHub 仓库克隆项目后，直接双击 `start.bat`：
 
 1. 启动前运行 `scripts/bootstrap.mjs`，使用 Git 检查 `origin` 当前分支是否有新提交。只快进同步远程发生变化的源码文件，未变化的文件不重新检出。
 2. 对比 `package-lock.json` 的 SHA-256 和当前机器的 Node 主版本；首次启动或依赖变化时自动运行 `npm ci` 下载依赖，其余启动复用现有 `node_modules`。
 3. 更新失败、离线或本地存在未提交的已跟踪改动时，不覆盖用户本地源码；依赖安装失败会恢复旧依赖并尝试回滚更新。
 4. 本地 `server/data/`（Muse/豆包浏览器资料、账号、登录状态、项目）与 `server/uploads/`（生成媒体）始终在 `.gitignore` 中，不上传、不被 Git 更新覆盖。
 
-可运行 `npm run update` 单独检查更新与依赖，或在启动前设置 `TAPNOW_SKIP_UPDATE=1` 仅跳过 Git 网络更新。私有仓库的自动检查需要本机 Git Credential Manager 已授权 GitHub；不要把 PAT 写入源码、远程 URL 或 Git 配置。
+可运行 `npm run update` 单独检查更新与依赖，或在启动前设置 `TAPNOW_SKIP_UPDATE=1` 仅跳过 Git 网络更新。公开仓库无需登录即可克隆及检查更新；只有仓库维护者上传新版本需要 GitHub 授权。不要把 PAT 写入源码、远程 URL 或 Git 配置。
 
 检查更新行为可运行 `npm run test:updater`，该测试使用操作系统临时目录中的本地 Git 仓库，不修改真实仓库或账号资料。
 
