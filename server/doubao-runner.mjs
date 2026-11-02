@@ -12,6 +12,9 @@ import {
 } from './doubao-controls.mjs';
 import {setVideoDuration} from './doubao-duration.mjs';
 import {findSendButton,submitAndObserve} from './doubao-submit.mjs';
+import {
+  hasVideoConfirmationInResponse,watchNewVideoConfirmation
+} from './doubao-confirmation.mjs';
 
 const doubaoPath=(request,pathPart)=>{
   try{return new URL(request.url()).pathname===pathPart}catch{return false;}
@@ -225,6 +228,7 @@ function responseObserver(page){
   const videoDownloads=new Map();
   const sseEvents=[];
   let sent=false;
+  let confirmationRequested=false;
   let lastUpdateAt=0;
   const callback=async response=>{
     if(!sent)return;
@@ -240,6 +244,7 @@ function responseObserver(page){
         const text=await response.text();
         sseEvents.push(...parseSseEvents(text).map(x=>x.event));
         for(const id of findVideoIds(text))videoIds.add(id);
+        if(hasVideoConfirmationInResponse(text))confirmationRequested=true;
       }else{
         const data=await response.json();
         const ids=findVideoIds(data);
@@ -268,13 +273,15 @@ function responseObserver(page){
       completedVideoIds.clear();
       videoDownloads.clear();
       sseEvents.length=0;
+      confirmationRequested=false;
     },
     stop(){page.off('response',callback);},
     get videoIds(){return [...videoIds];},
     get completedIds(){return [...completedVideoIds];},
     get downloads(){return new Map(videoDownloads);},
     get sseEventTypes(){return [...new Set(sseEvents)];},
-    get lastUpdateAt(){return lastUpdateAt;}
+    get lastUpdateAt(){return lastUpdateAt;},
+    get confirmationRequested(){return confirmationRequested;}
   };
 }
 
@@ -377,10 +384,25 @@ export async function prepareVideoReferencesAndPrompt({
   return editor;
 }
 
+export async function sendVideoConfirmation(page,onProgress=()=>{}){
+  onProgress('豆包要求确认生成参数，正在自动回复「确认」',37);
+  // Do not reapply video settings or re-upload reference images. This is a
+  // second plain message in the same conversation, not a new video job.
+  const editor=await fillVideoPrompt(page,'确认');
+  await editor.press('Escape').catch(()=>{});
+  const button=await findSendButton(page,editor);
+  const request=await submitAndObserve(page,button);
+  const ack=await request.response();
+  if(!ack||!ack.ok())
+    throw new Error('豆包已要求视频参数确认，但「确认」消息提交失败');
+  onProgress('已向豆包回复「确认」，正在等待视频生成',40);
+}
+
 export async function runSeedanceBrowser({
   page,job,localReferenceFile,outputDir,onProgress
 }){
   const watcher=responseObserver(page);
+  let confirmationMonitor=null;
   try{
     onProgress('选择 '+(job.model||'Seedance 2.0 Mini')+'、画面比例和时长',10);
     await configureVideo(page,job);
@@ -391,6 +413,7 @@ export async function runSeedanceBrowser({
     // observed after the UI sends it. No hard-coded HAR session request.
     const send=await findSendButton(page,editor);
     const baselineCount=await page.getByRole('button',{name:/^下载(?:视频)?$/}).count();
+    confirmationMonitor=await watchNewVideoConfirmation(page);
     watcher.markSubmitted();
     watcher.start();
     const request=await submitAndObserve(page,send);
@@ -401,7 +424,15 @@ export async function runSeedanceBrowser({
     onProgress('豆包已接收生成请求，正在等待新视频',35);
 
     const deadline=Date.now()+35*60*1000;
+    let confirmationSent=false;
     while(Date.now()<deadline){
+      if(!confirmationSent&&
+        (watcher.confirmationRequested||await confirmationMonitor.requested())){
+        // Only one confirmation per generation job, even if Doubao repeats the
+        // same assistant prompt in SSE and the visible chat simultaneously.
+        confirmationSent=true;
+        await sendVideoConfirmation(page,onProgress);
+      }
       const downloadButtons=page.getByRole('button',{name:/^下载(?:视频)?$/});
       const fresh=await downloadButtons.count();
       if(fresh>baselineCount&&watcher.videoIds.length){
@@ -449,5 +480,8 @@ export async function runSeedanceBrowser({
       await page.waitForTimeout(1800);
     }
     throw new Error('已发送视频任务，但未在超时窗口内识别到本次生成的视频下载结果；浏览器保留供检查');
-  }finally{watcher.stop();}
+  }finally{
+    watcher.stop();
+    if(confirmationMonitor)await confirmationMonitor.stop();
+  }
 }
