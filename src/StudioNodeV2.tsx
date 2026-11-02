@@ -15,6 +15,7 @@ import { defaultVideoModel, models, videoModelOptions } from './sample';
 import { VideoPromptEditor } from './VideoPromptEditor';
 import { ComposingTextarea } from './ComposingTextarea';
 import { GenerationVisualCanvas } from './GenerationVisualCanvas';
+import { intrinsicImageFrame } from './image-frame';
 
 const ICON = { image: ImageIcon, video: Video, text: AlignLeft, audio: AudioLines };
 const TITLE = { image: 'Image', video: 'Video', text: 'Text', audio: 'Audio' };
@@ -172,10 +173,13 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
   const nodeRef = useRef<HTMLDivElement>(null);
   const kind = data.kind;
   const videoFrame=videoFrames[data.ratio||'16:9']||videoFrames['16:9'];
-  // Use the requested output aspect ratio for image frames, just like videos.
-  // The original media is displayed within the frame without stretching.
+  // Empty image nodes use the requested generation ratio. Once an uploaded or
+  // generated image exists, its own measured pixel dimensions determine BOTH
+  // the frame width and height; the generation setting is not the image size.
+  const intrinsicFrame=kind==='image'&&data.mediaUrl
+    ?intrinsicImageFrame(data.mediaWidth,data.mediaHeight):null;
   const imageFrame=kind==='image'
-    ?videoFrames[data.ratio||'2:3']||videoFrames['2:3']:null;
+    ?(intrinsicFrame||videoFrames[data.ratio||'2:3']||videoFrames['2:3']):null;
   const nodeSize=kind==='video'?{
     '--tn-video-width':videoFrame.width+'px',
     '--tn-video-height':videoFrame.height+'px'
