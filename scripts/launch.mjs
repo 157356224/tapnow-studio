@@ -110,6 +110,9 @@ async function main(){
     if(health.videoStartRevision!=='reply-prefix-v1')
       throw new Error('端口 3701 的旧版豆包 API 无法识别 Seedance 真正开工的回复。'+
         '请先关闭旧版 TapNow API，再重新运行 start.bat。');
+    if(health.videoDownloadRevision!=='completed-card-v1')
+      throw new Error('端口 3701 仍在运行不支持豆包成品视频卡片回传的旧版 API。'+
+        '请先关闭旧版 TapNow API，再重新运行 start.bat。');
     if(health.museBridgeRevision!=='quota-auto-v6-image-resolution')
       throw new Error('端口 3701 的 TapNow API 尚未接入 Muse 独立浏览器。'+
         '请先关闭旧服务，再运行当前项目的 start.bat。');

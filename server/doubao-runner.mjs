@@ -16,6 +16,10 @@ import {
   hasVideoConfirmationInResponse,inspectVideoStartReply,assertVideoStartReply,
   watchNewVideoConfirmation
 } from './doubao-confirmation.mjs';
+import {
+  watchNewVideoCompletion,revealVideoDownloadControl,
+  findVideoDownloadControl,openFreshVideoPreview
+} from './doubao-completed-video.mjs';
 
 const doubaoPath=(request,pathPart)=>{
   try{return new URL(request.url()).pathname===pathPart}catch{return false;}
@@ -260,7 +264,14 @@ function responseObserver(page,expectedModel){
         for(const id of ids)videoIds.add(id);
         if(url.pathname==='/samantha/video/get_play_info'){
           const requestedId=JSON.parse(response.request().postData()||'{}').vid;
-          if(typeof requestedId==='string')completedVideoIds.add(requestedId);
+          // The play-info endpoint identifies the video being opened even
+          // when the IM-chain payload does not expose a video_id field.
+          // This makes the newly opened completed card recoverable without
+          // requiring the user to click a hidden Download button.
+          if(typeof requestedId==='string'&&/^v[a-z0-9]{20,45}$/i.test(requestedId)){
+            completedVideoIds.add(requestedId);
+            videoIds.add(requestedId);
+          }
         }
         if(url.pathname==='/creativity/resource/get_without_watermark'){
           const request=JSON.parse(response.request().postData()||'{}');
@@ -312,11 +323,11 @@ function validateVideoFile(filename){
   if(!isMp4&&!isWebm)throw new Error('下载的文件不是有效 MP4/WebM 容器');
 }
 
-async function saveBrowserDownload(page,button,outputDir){
+export async function saveBrowserDownload(page,button,outputDir,{timeout=10000}={}){
   // Always attach a rejection handler before clicking. Otherwise a failed
   // click leaves a 15 s Playwright timeout which can terminate Node.js as an
   // unhandled rejection, even though the original click error was handled.
-  const wait=page.waitForEvent('download',{timeout:15000})
+  const wait=page.waitForEvent('download',{timeout})
     .then(download=>({download}),error=>({error}));
   await button.click({timeout:6000});
   const observed=await wait;
@@ -357,6 +368,54 @@ async function saveSignedDownload(url,outputDir){
     fs.rmSync(file,{force:true});
     throw err;
   }finally{clearTimeout(timer);}
+}
+
+async function saveSignedDownloadWithBrowserFallback(page,url,outputDir){
+  try{return await saveSignedDownload(url,outputDir);}
+  catch(primaryError){
+    // The browser can have a proxy or authenticated session that Node fetch
+    // does not use. Playwright's request context shares this browser's cookies.
+    const parsed=new URL(url);
+    if(parsed.protocol!=='https:'||
+      !/(\.|^)(doubao\.com|snssdk\.com|bytedance\.com|byteimg\.com)$/.test(parsed.hostname))
+      throw primaryError;
+    const response=await page.context().request.get(url,{
+      timeout:120000,failOnStatusCode:false
+    }).catch(()=>null);
+    if(!response?.ok())throw primaryError;
+    const final=new URL(response.url());
+    if(final.protocol!=='https:'||
+      !/(\.|^)(doubao\.com|snssdk\.com|bytedance\.com|byteimg\.com)$/.test(final.hostname))
+      throw primaryError;
+    const file=path.join(outputDir,crypto.randomUUID()+'.mp4');
+    try{
+      fs.writeFileSync(file,await response.body(),{flag:'wx'});
+      validateVideoFile(file);
+      return file;
+    }catch{
+      fs.rmSync(file,{force:true});
+      throw primaryError;
+    }
+  }
+}
+
+export async function requestCurrentVideoDownloadLink(page,videoId){
+  // Request the same *download* endpoint seen when a user presses Doubao's
+  // download action, in the active account page context. Cookies stay inside
+  // Edge; no HAR token, signature or session is replayed or persisted.
+  if(!/^v[a-z0-9]{20,45}$/i.test(videoId))return null;
+  if(new URL(page.url()).hostname!=='www.doubao.com')return null;
+  const data=await page.evaluate(async vid=>{
+    try{
+      const reply=await fetch('/creativity/resource/get_without_watermark',{
+        method:'POST',credentials:'same-origin',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify({vid:[vid]})
+      });
+      return reply.ok?await reply.json():null;
+    }catch{return null;}
+  },videoId).catch(()=>null);
+  return data?getSignedVideoDownload(data,videoId):null;
 }
 
 // The canvas's @图片N refers to a connected image's stable order. Only
@@ -420,6 +479,7 @@ export async function runSeedanceBrowser({
   const expectedModel=job.model||'Seedance 2.0 Mini';
   const watcher=responseObserver(page,expectedModel);
   let confirmationMonitor=null;
+  let completionMonitor=null;
   try{
     onProgress('选择 '+(job.model||'Seedance 2.0 Mini')+'、画面比例和时长',10);
     await configureVideo(page,job);
@@ -431,6 +491,7 @@ export async function runSeedanceBrowser({
     const send=await findSendButton(page,editor);
     const baselineCount=await page.getByRole('button',{name:/^下载(?:视频)?$/}).count();
     confirmationMonitor=await watchNewVideoConfirmation(page,expectedModel);
+    completionMonitor=await watchNewVideoCompletion(page);
     watcher.markSubmitted();
     watcher.start();
     const request=await submitAndObserve(page,send);
@@ -446,6 +507,10 @@ export async function runSeedanceBrowser({
     let confirmationRequest=null;
     let confirmationAt=0;
     let videoStarted=false;
+    let completionObservedAt=0;
+    let lastDownloadAttempt=0;
+    let viewerOpened=false;
+    const attemptedSigned=new Set();
     while(Date.now()<deadline){
       if(!videoStarted&&
         (watcher.generationStarted||await confirmationMonitor.started())){
@@ -477,6 +542,71 @@ export async function runSeedanceBrowser({
       if(!videoStarted){
         await page.waitForTimeout(500);
         continue;
+      }
+      const newVideoCompleted=await completionMonitor.completed();
+      if(newVideoCompleted&&!completionObservedAt){
+        completionObservedAt=Date.now();
+        onProgress('豆包已生成视频，正在获取素材并回传画布',82);
+      }
+      // The finished video card (as pictured in Doubao chat) often has no
+      // role=button named 下载 at all until hovered or opened.
+      if(newVideoCompleted&&Date.now()-lastDownloadAttempt>=3500){
+        lastDownloadAttempt=Date.now();
+        const {card,control}=await revealVideoDownloadControl(page);
+        if(control){
+          try{
+            const filename=await saveBrowserDownload(page,control,outputDir);
+            return {filename,videoIds:watcher.videoIds,
+              submittedModel:actual.model,sseEventTypes:watcher.sseEventTypes};
+          }catch{/* Some controls open a menu rather than downloading. */}
+        }
+        if(card){
+          // Only click an actual newly opened menu item. Clicking the same
+          // Download icon a second time can CLOSE its popup.
+          const menuItem=page.getByRole('menuitem',{name:/下载|无水印|download/i}).last();
+          const dialogAction=page.getByRole('dialog')
+            .getByRole('button',{name:/下载|无水印|download/i}).last();
+          const menu=await visible(menuItem)?menuItem:
+            await visible(dialogAction)?dialogAction:
+            !control?await findVideoDownloadControl(page,card):null;
+          if(menu){
+            try{
+              const filename=await saveBrowserDownload(page,menu,outputDir);
+              return {filename,videoIds:watcher.videoIds,
+                submittedModel:actual.model,sseEventTypes:watcher.sseEventTypes};
+            }catch{/* Try preview / media link. */}
+          }
+          if(!viewerOpened){
+            viewerOpened=true;
+            await openFreshVideoPreview(card);
+          }
+          const opened=await findVideoDownloadControl(page,card);
+          if(opened){
+            try{
+              const filename=await saveBrowserDownload(page,opened,outputDir);
+              return {filename,videoIds:watcher.videoIds,
+                submittedModel:actual.model,sseEventTypes:watcher.sseEventTypes};
+            }catch{/* Keep waiting and retrying until a real file is saved. */}
+          }
+        }
+      }
+      // A play-info response for a *freshly opened* video supplies its ID.
+      // Never blindly request a download for an ID from a chat history list,
+      // because that could return an old unrelated video.
+      if(newVideoCompleted&&watcher.completedIds.length){
+        for(const vid of watcher.completedIds){
+          if(!watcher.videoIds.includes(vid)||attemptedSigned.has(vid))continue;
+          attemptedSigned.add(vid);
+          const url=watcher.downloads.get(vid)||
+            await requestCurrentVideoDownloadLink(page,vid);
+          if(!url)continue;
+          try{
+            const filename=await saveSignedDownloadWithBrowserFallback(
+              page,url,outputDir);
+            return {filename,videoIds:[vid],
+              submittedModel:actual.model,sseEventTypes:watcher.sseEventTypes};
+          }catch{/* The card's Download UI can still become available later. */}
+        }
       }
       const downloadButtons=page.getByRole('button',{name:/^下载(?:视频)?$/});
       const fresh=await downloadButtons.count();
@@ -515,18 +645,21 @@ export async function runSeedanceBrowser({
       for(const [vid,url] of watcher.downloads){
         if(watcher.videoIds.includes(vid)){
           onProgress('已验证视频 ID，正在保存 MP4',88);
-          const filename=await saveSignedDownload(url,outputDir);
+          const filename=await saveSignedDownloadWithBrowserFallback(page,url,outputDir);
           return {
             filename,videoIds:[vid],
             submittedModel:actual.model,sseEventTypes:watcher.sseEventTypes
           };
         }
       }
+      if(completionObservedAt&&Date.now()-completionObservedAt>120000)
+        throw new Error('豆包已显示「你的视频生成好了」，但 2 分钟内无法下载真实 MP4；请在账号浏览器检查视频卡片的下载操作');
       await page.waitForTimeout(1800);
     }
     throw new Error('视频已开始生成，但未在超时窗口内识别到本次视频下载结果；浏览器保留供检查');
   }finally{
     watcher.stop();
     if(confirmationMonitor)await confirmationMonitor.stop();
+    if(completionMonitor)await completionMonitor.stop();
   }
 }

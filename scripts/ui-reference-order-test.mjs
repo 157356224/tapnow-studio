@@ -54,6 +54,7 @@ try{
     body:JSON.stringify({referenceSelectionRevision:'at-order-v2',
       videoModelRevision:'mini-fast-v1',multiImageUploadRevision:'v3-prompt-first',
       videoStartRevision:'reply-prefix-v1',
+      videoDownloadRevision:'completed-card-v1',
       museBridgeRevision:'quota-auto-v6-image-resolution'})
   }));
   await page.route('**/api/doubao/accounts',route=>route.fulfill({

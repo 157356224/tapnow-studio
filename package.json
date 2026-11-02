@@ -30,6 +30,7 @@
     "test:video-prompt": "node scripts/doubao-prompt-richtext-test.mjs",
     "test:video-confirmation": "node scripts/doubao-confirmation-test.mjs",
     "test:video-start": "node scripts/doubao-video-start-test.mjs",
+    "test:video-download": "node scripts/doubao-completed-video-test.mjs",
     "test:port-menu": "node scripts/ui-port-menu-test.mjs",
     "test:doubao": "node scripts/ui-doubao-test.mjs",
     "test:vault": "node scripts/doubao-vault-check.mjs",
