@@ -152,7 +152,48 @@ export async function uploadReference(page,ref,localReferenceFile,onProgress){
   }finally{monitor.close();}
 }
 
+// The Doubao rich-text composer can split text into paragraphs, add invisible
+// zero-width characters and render @图N as a non-editable mention widget.
+// Inspect *visible editor content* rather than comparing raw textContent with
+// the source string. Do not accept a missing or partially written prompt.
+const normalizePromptText=text=>String(text||'')
+  .normalize('NFKC')
+  .replace(/[\u200B-\u200D\u2060\uFEFF]/g,'')
+  .replace(/\s+/g,'')
+  .trim();
+
+async function promptIsVisibleInEditor(editor,prompt){
+  const expected=normalizePromptText(prompt);
+  if(!expected)return false;
+  return editor.evaluate((element,expectedText)=>{
+    const normalize=text=>String(text||'')
+      .normalize('NFKC')
+      .replace(/[\u200B-\u200D\u2060\uFEFF]/g,'')
+      .replace(/\s+/g,'')
+      .trim();
+    const values=[];
+    if('value' in element)values.push(element.value);
+    values.push(element.innerText||'',element.textContent||'');
+    // Mention widgets can show 图1 while their accessible label is @图1.
+    // Include only text explicitly represented by the live editor DOM.
+    const snapshot=element.cloneNode(true);
+    for(const mention of snapshot.querySelectorAll(
+      '[data-type="mention"],[data-mention],[data-mention-id],'+
+      '[contenteditable="false"][aria-label]')){
+      const label=mention.getAttribute('aria-label')||
+        mention.getAttribute('data-label')||
+        mention.getAttribute('data-mention')||'';
+      if(/^@?图\d+$/.test(label.trim()))
+        mention.textContent=label.startsWith('@')?label:'@'+label;
+    }
+    values.push(snapshot.textContent||'');
+    return values.some(value=>normalize(value).includes(expectedText));
+  },expected).catch(()=>false);
+}
+
 export async function fillVideoPrompt(page,prompt){
+  if(!normalizePromptText(prompt))
+    throw new Error('视频提示词为空，不能发送');
   const editors=page.locator('[contenteditable="true"],textarea');
   const count=await editors.count();
   let editor=null;
@@ -165,11 +206,17 @@ export async function fillVideoPrompt(page,prompt){
   }
   if(!editor)throw new Error('豆包视频提示词输入框不存在');
   await editor.fill(prompt);
-  const entered=await editor.evaluate(element=>
-    element instanceof HTMLTextAreaElement ? element.value : (element.textContent||''));
-  if(!entered.includes(prompt))
-    throw new Error('视频提示词未成功写入豆包输入框，已停止发送');
-  return editor;
+  // React/ProseMirror may transform the editor shortly after the input event.
+  // Check twice on separate ticks, not against a stale synchronous DOM value.
+  const deadline=Date.now()+3000;
+  let consecutive=0;
+  do{
+    await page.waitForTimeout(120);
+    if(await promptIsVisibleInEditor(editor,prompt)){
+      if(++consecutive>=2)return editor;
+    }else consecutive=0;
+  }while(Date.now()<deadline);
+  throw new Error('视频提示词未完整保留在豆包输入框，已停止发送（请检查网页是否重置或转换了输入内容）');
 }
 
 function responseObserver(page){
@@ -301,34 +348,45 @@ export function doubaoAttachmentPrompt(prompt,references){
   });
 }
 
-export async function runSeedanceBrowser({
-  page,job,localReferenceFile,outputDir,onProgress
+// Upload each image before filling the text. This guarantees that a failed
+// upload is reported as an attachment problem, and a composer remount caused
+// by image insertion cannot wipe out an already-entered video prompt.
+export async function prepareVideoReferencesAndPrompt({
+  page,job,localReferenceFile,onProgress=()=>{}
 }){
   validateImageReferences(job.references);
   const textForDoubao=doubaoAttachmentPrompt(job.prompt,job.references);
+  for(const [index,ref] of job.references.entries()){
+    onProgress('上传参考图片 '+(index+1)+'/'+job.references.length+'：'+ref.name,17);
+    try{
+      await uploadReference(page,ref,localReferenceFile,onProgress);
+    }catch(error){
+      throw new Error('第 '+(index+1)+'/'+job.references.length+
+        ' 张参考图上传未完成：'+String(error.message||error));
+    }
+    onProgress('参考图片已确认 '+(index+1)+'/'+job.references.length,
+      17+Math.round((index+1)/job.references.length*12));
+  }
+  onProgress('参考图片就绪，正在填写视频提示词',30);
+  const editor=await fillVideoPrompt(page,textForDoubao);
+  // Escape only dismisses mention/completion popovers; verify again if the
+  // site changes the rich-text editor while closing a popup.
+  await editor.press('Escape').catch(()=>{});
+  if(!await promptIsVisibleInEditor(editor,textForDoubao))
+    throw new Error('关闭输入提示后豆包清空了视频提示词，已停止发送');
+  return editor;
+}
+
+export async function runSeedanceBrowser({
+  page,job,localReferenceFile,outputDir,onProgress
+}){
   const watcher=responseObserver(page);
   try{
     onProgress('选择 '+(job.model||'Seedance 2.0 Mini')+'、画面比例和时长',10);
     await configureVideo(page,job);
-    // Fill text before attachments: a failed third upload must never leave
-    // the user's carefully written prompt missing in the opened browser.
-    await fillVideoPrompt(page,textForDoubao);
-    for(const [index,ref] of job.references.entries()){
-      onProgress('上传参考图片 '+(index+1)+'/'+job.references.length+'：'+ref.name,17);
-      try{
-        await uploadReference(page,ref,localReferenceFile,onProgress);
-      }catch(error){
-        throw new Error('第 '+(index+1)+'/'+job.references.length+
-          ' 张参考图上传未完成：'+String(error.message||error));
-      }
-      onProgress('参考图片已确认 '+(index+1)+'/'+job.references.length,
-        17+Math.round((index+1)/job.references.length*12));
-    }
-    // React can remount its contenteditable after a reference is appended.
-    // Reacquire the current editor and verify the exact prompt before submit.
-    const editor=await fillVideoPrompt(page,textForDoubao);
-    // The ratio/duration popup can cover the submit icon.
-    await editor.press('Escape').catch(()=>{});
+    const editor=await prepareVideoReferencesAndPrompt({
+      page,job,localReferenceFile,onProgress
+    });
     // Model/ration/duration verification is made against the *actual* POST
     // observed after the UI sends it. No hard-coded HAR session request.
     const send=await findSendButton(page,editor);

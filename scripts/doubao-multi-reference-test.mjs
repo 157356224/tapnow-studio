@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {uploadReference,fillVideoPrompt,doubaoAttachmentPrompt} from '../server/doubao-runner.mjs';
+import {
+  uploadReference,fillVideoPrompt,doubaoAttachmentPrompt,
+  prepareVideoReferencesAndPrompt
+} from '../server/doubao-runner.mjs';
 
 // A second unrelated file input is deliberately mounted after the first
 // upload. The client must continue choosing the image-specific input.
@@ -15,6 +18,8 @@ fs.writeFileSync(one,png);fs.writeFileSync(two,png);fs.writeFileSync(three,png);
 const browser=await chromium.launch({channel:'msedge',headless:true});
 const page=await browser.newPage();
 const counts={prepare:0,upload:0};
+const promptDuringUpload=[];
+let rejectUploadAuthorization=false;
 const failures=[];
 page.on('pageerror',e=>failures.push(e.message));
 const html=[
@@ -49,9 +54,13 @@ await page.route('https://video-uploads.local/**',async route=>{
     await route.fulfill({contentType:'text/html',body:html});
   }else if(pathname==='/alice/resource/prepare_upload'){
     counts.prepare++;
-    await route.fulfill({status:200,contentType:'application/json',body:'{"ok":true}'});
+    await route.fulfill({
+      status:rejectUploadAuthorization?403:200,
+      contentType:'application/json',body:'{"ok":true}'
+    });
   }else if(pathname==='/upload/v1/reference'){
     counts.upload++;
+    promptDuringUpload.push(await page.locator('#prompt').inputValue());
     await route.fulfill({status:200,contentType:'application/json',body:'{"ok":true}'});
   }else await route.abort();
 });
@@ -68,21 +77,43 @@ assert.equal(doubaoAttachmentPrompt('@图片3 之后 @图片1',[
 assert.equal(doubaoAttachmentPrompt('只参考 @图片2',[{token:'@图片2'}]),
   '只参考 @图1','One selected image maps to attachment slot 1');
 assert.throws(()=>doubaoAttachmentPrompt('@图片2',[{token:'@图片1'}]),/未包含/);
-  const prompt='三张参考图片构成一个连续的电影镜头';
-  await fillVideoPrompt(page,prompt);
+  const prompt='按 @图片1、@图片2、@图片3 的顺序构成连续电影镜头';
   const lookup=url=>url.endsWith('/first.png')?one:
     url.endsWith('/second.png')?two:three;
-  for(const ref of refs)await uploadReference(page,ref,lookup,()=>{});
-  await fillVideoPrompt(page,prompt);
-  assert.equal(await page.locator('#prompt').inputValue(),prompt,
-    'Prompt must survive composer remounts and attachment changes');
+  const progress=[];
+  await prepareVideoReferencesAndPrompt({
+    page,job:{prompt,references:refs.map((ref,i)=>({...ref,token:'@图片'+(i+1)}))},
+    localReferenceFile:lookup,onProgress:(message)=>progress.push(message)
+  });
+  assert.equal(await page.locator('#prompt').inputValue(),
+    '按 @图1、@图2、@图3 的顺序构成连续电影镜头',
+    'Prompt must be written after all references have been uploaded');
+  assert.deepEqual(promptDuringUpload,['','',''],
+    'Do not write or validate the prompt before any reference upload');
+  assert.ok(progress.indexOf('参考图片就绪，正在填写视频提示词')>
+    progress.indexOf('参考图片已确认 3/3'),
+    'Prompt stage must come after every upload confirmation');
   assert.equal(counts.prepare,3,'Each reference requires its own upload authorization');
   assert.equal(counts.upload,3,'Every reference must complete its upload');
   assert.equal(await page.locator('#references img').count(),3,
     'All three thumbnails must appear before any generation submit');
   assert.equal(await page.locator('#decoy').count(),1);
+  // An upload failure should be reported before any prompt is inserted, and
+  // must never cause a generation request with missing reference pictures.
+  rejectUploadAuthorization=true;
+  await page.setContent(html);
+  await assert.rejects(
+    ()=>prepareVideoReferencesAndPrompt({
+      page,job:{prompt,references:refs.map((ref,i)=>({...ref,token:'@图片'+(i+1)}))},
+      localReferenceFile:lookup,onProgress:()=>{}
+    }),
+    /第 1\/3 张参考图上传未完成.*403/,
+    'A rejected image upload must stop before the prompt is submitted'
+  );
+  assert.equal(await page.locator('#prompt').inputValue(),'',
+    'Do not fill the prompt when the first reference was not uploaded');
   assert.deepEqual(failures,[]);
-  console.log('PASS: three images, re-mounted picker, delayed thumbnail, prompt restore, independent upload confirmations');
+  console.log('PASS: three images before prompt, remounted picker, delayed thumbnails, @ mappings; failed upload blocks prompt and submission');
 }finally{
   await browser.close();
   fs.rmSync(temp,{recursive:true,force:true});

@@ -27,6 +27,7 @@
     "test:many-edges-performance": "node scripts/ui-many-edges-performance-test.mjs",
     "test:browser-cleanup": "node scripts/browser-cleanup-test.mjs",
     "test:multi-image": "node scripts/doubao-multi-reference-test.mjs",
+    "test:video-prompt": "node scripts/doubao-prompt-richtext-test.mjs",
     "test:port-menu": "node scripts/ui-port-menu-test.mjs",
     "test:doubao": "node scripts/ui-doubao-test.mjs",
     "test:vault": "node scripts/doubao-vault-check.mjs",
