@@ -53,6 +53,7 @@ try{
     status:200,contentType:'application/json',
     body:JSON.stringify({referenceSelectionRevision:'at-order-v2',
       videoModelRevision:'mini-fast-v1',multiImageUploadRevision:'v3-prompt-first',
+      videoStartRevision:'reply-prefix-v1',
       museBridgeRevision:'quota-auto-v6-image-resolution'})
   }));
   await page.route('**/api/doubao/accounts',route=>route.fulfill({

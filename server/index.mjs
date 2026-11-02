@@ -62,6 +62,7 @@ app.get('/api/health', (_req, res) => res.json({
   referenceSelectionRevision:'at-order-v2',
   multiImageUploadRevision:'v3-prompt-first',
   videoModelRevision:'mini-fast-v1',
+  videoStartRevision:'reply-prefix-v1',
   liveVideoGenerationVerified:false,
   workspaceId:crypto.createHash('sha256').update(
     process.platform==='win32'?path.resolve(root,'..').toLowerCase():

@@ -363,6 +363,12 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
         role="status" aria-label={data.status==='queued'?'排队等待生成':'正在生成'}
         title={data.jobMessage||'正在生成'} data-generation-status={data.status}>
         <GenerationVisualCanvas nodeId={id}/>
+        {kind==='video'&&provider==='doubao'&&
+          <span className="tn-video-generation-stage" aria-live="polite"
+            data-video-started={data.status==='running'?'true':'false'}>
+            {data.status==='running'?'视频已开始生成':
+              data.jobMessage||'等待豆包确认视频开始生成'}
+          </span>}
       </div>}
       {kind!=='image'&&kind!=='video'&&data.status==='running'&&
         <div className="tn-running">生成中 {data.progress||0}%<span style={{width:(data.progress||0)+'%'}}/></div>}

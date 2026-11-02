@@ -107,6 +107,9 @@ async function main(){
     if(health.videoModelRevision!=='mini-fast-v1')
       throw new Error('端口 3701 正在运行旧版视频模型服务，无法保证选用 Seedance 2.0 Mini。'+
         '请先关闭旧的 TapNow API 进程，再运行当前项目的 start.bat。');
+    if(health.videoStartRevision!=='reply-prefix-v1')
+      throw new Error('端口 3701 的旧版豆包 API 无法识别 Seedance 真正开工的回复。'+
+        '请先关闭旧版 TapNow API，再重新运行 start.bat。');
     if(health.museBridgeRevision!=='quota-auto-v6-image-resolution')
       throw new Error('端口 3701 的 TapNow API 尚未接入 Muse 独立浏览器。'+
         '请先关闭旧服务，再运行当前项目的 start.bat。');

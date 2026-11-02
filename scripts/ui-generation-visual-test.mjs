@@ -74,6 +74,10 @@ try{
     '正在生成');
   assert.equal(await video.locator('.tn-generating-visual').getAttribute('aria-label'),
     '排队等待生成');
+  const stage=video.locator('.tn-video-generation-stage');
+  assert.equal(await stage.innerText(),'正在等待生成账号',
+    'Before Doubao confirms the start, the canvas must show waiting status');
+  assert.equal(await stage.getAttribute('data-video-started'),'false');
   // A single worker-driven canvas replaces 600 animated DOM elements.
   const canvas=image.locator('.tn-generating-canvas');
   const videoCanvas=video.locator('.tn-generating-canvas');
@@ -137,6 +141,29 @@ try{
     await page.screenshot({path:screenshot,animations:'allow'});
     console.log('GENERATION_VISUAL='+screenshot);
   }
+
+  // Only a backend-verified Seedance start switches the video node to
+  // running. An HTTP 200 or sent confirmation is still represented as queued.
+  project.nodes=project.nodes.map(node=>node.id==='video-queued'
+    ?{...node,data:{...node.data,status:'running',
+      jobMessage:'视频已开始生成（Seedance 2.0 Mini）'}}
+    :node);
+  await page.reload({waitUntil:'domcontentloaded'});
+  await video.locator('.tn-video-generation-stage').waitFor({state:'visible'});
+  assert.equal(await video.locator('.tn-video-generation-stage').innerText(),
+    '视频已开始生成');
+  assert.equal(await video.locator('.tn-video-generation-stage')
+    .getAttribute('data-video-started'),'true');
+  project.nodes=project.nodes.map(node=>node.id==='video-queued'
+    ?{...node,data:{...node.data,status:'error',
+      jobMessage:'视频未开始生成：发送「确认」后未收到指定 Seedance 开工回复'}}
+    :node);
+  await page.reload({waitUntil:'domcontentloaded'});
+  await video.locator('.tn-node-error').waitFor({state:'visible'});
+  assert.match(await video.locator('.tn-node-error').innerText(),/视频未开始生成/,
+    'An unconfirmed start must be returned visibly to the video node');
+  assert.equal(await video.locator('.tn-generating-visual').count(),0,
+    'Do not keep the generating animation running when the video did not start');
 
   // A terminal status must instantly replace the scanning overlay without
   // leaving a strip or a percentage displayed over the finished media.

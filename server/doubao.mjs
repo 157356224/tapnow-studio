@@ -228,8 +228,15 @@ async function runJob(job){
   }
   const result=await runSeedanceBrowser({
     page,job,localReferenceFile,outputDir:uploadDir,
-    onProgress:(message,progress)=>{
-      updateJob(job.id,{status:'running',message,progress});
+    onProgress:(message,progress,phase)=>{
+      // Submission, upload and confirmation are NOT evidence that a video
+      // actually started. The frontend only enters running on the explicit
+      // Seedance start-of-generation reply.
+      const started=phase==='started'||jobs.get(job.id)?.status==='running';
+      updateJob(job.id,{status:started?'running':'queued',message,progress});
+      if(phase==='started')persistProjectNode(job,{
+        status:'running',progress,jobMessage:message
+      });
     }
   });
   updateJob(job.id,{

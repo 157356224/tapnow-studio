@@ -560,11 +560,14 @@ function Workspace() {
       }catch(e){notify((e as Error).message);return;}
       try{
         const health=await request<{multiImageUploadRevision?:string;videoModelRevision?:string;
+          videoStartRevision?:string;
           referenceSelectionRevision?:string}>('/api/health');
         if(health.referenceSelectionRevision!=='at-order-v2')
           throw new Error('本地视频 API 是旧版本，参考图排序可能错误；请重启 TapNow。');
         if(health.videoModelRevision!=='mini-fast-v1')
           throw new Error('本地豆包 API 仍是旧版，可能错误选用 Fast。请先退出旧的 TapNow API 并重新运行当前项目 start.bat。');
+        if(health.videoStartRevision!=='reply-prefix-v1')
+          throw new Error('本地豆包 API 不支持视频实际开工回执，请退出旧的 TapNow API 并重新启动 start.bat。');
         if(refs.length>1&&health.multiImageUploadRevision!=='v3-prompt-first')
           throw new Error('本地豆包 API 仍在运行旧版多图上传代码。请结束旧的 TapNow 启动窗口与 API 进程，重新运行 start.bat 后再发送。');
         // Persist the exact current canvas BEFORE submitting the job. Auto-save

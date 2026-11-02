@@ -13,7 +13,8 @@ import {
 import {setVideoDuration} from './doubao-duration.mjs';
 import {findSendButton,submitAndObserve} from './doubao-submit.mjs';
 import {
-  hasVideoConfirmationInResponse,watchNewVideoConfirmation
+  hasVideoConfirmationInResponse,inspectVideoStartReply,assertVideoStartReply,
+  watchNewVideoConfirmation
 } from './doubao-confirmation.mjs';
 
 const doubaoPath=(request,pathPart)=>{
@@ -222,13 +223,16 @@ export async function fillVideoPrompt(page,prompt){
   throw new Error('视频提示词未完整保留在豆包输入框，已停止发送（请检查网页是否重置或转换了输入内容）');
 }
 
-function responseObserver(page){
+function responseObserver(page,expectedModel){
   const videoIds=new Set();
   const completedVideoIds=new Set();
   const videoDownloads=new Map();
   const sseEvents=[];
   let sent=false;
   let confirmationRequested=false;
+  let generationStarted=false;
+  const chatReplies=new Map();
+  let lastChatReply=null;
   let lastUpdateAt=0;
   const callback=async response=>{
     if(!sent)return;
@@ -245,6 +249,11 @@ function responseObserver(page){
         sseEvents.push(...parseSseEvents(text).map(x=>x.event));
         for(const id of findVideoIds(text))videoIds.add(id);
         if(hasVideoConfirmationInResponse(text))confirmationRequested=true;
+        const reply=inspectVideoStartReply(text,expectedModel);
+        if(reply.started)generationStarted=true;
+        chatReplies.set(response.request(),reply);
+        lastChatReply={request:response.request(),...reply};
+        if(chatReplies.size>12)chatReplies.delete(chatReplies.keys().next().value);
       }else{
         const data=await response.json();
         const ids=findVideoIds(data);
@@ -274,6 +283,9 @@ function responseObserver(page){
       videoDownloads.clear();
       sseEvents.length=0;
       confirmationRequested=false;
+      generationStarted=false;
+      chatReplies.clear();
+      lastChatReply=null;
     },
     stop(){page.off('response',callback);},
     get videoIds(){return [...videoIds];},
@@ -281,7 +293,10 @@ function responseObserver(page){
     get downloads(){return new Map(videoDownloads);},
     get sseEventTypes(){return [...new Set(sseEvents)];},
     get lastUpdateAt(){return lastUpdateAt;},
-    get confirmationRequested(){return confirmationRequested;}
+    get confirmationRequested(){return confirmationRequested;},
+    get generationStarted(){return generationStarted;},
+    get lastChatReply(){return lastChatReply;},
+    replyFor(request){return chatReplies.get(request)||null;}
   };
 }
 
@@ -395,13 +410,15 @@ export async function sendVideoConfirmation(page,onProgress=()=>{}){
   const ack=await request.response();
   if(!ack||!ack.ok())
     throw new Error('豆包已要求视频参数确认，但「确认」消息提交失败');
-  onProgress('已向豆包回复「确认」，正在等待视频生成',40);
+  onProgress('已向豆包回复「确认」，正在核验视频是否开始生成',40);
+  return request;
 }
 
 export async function runSeedanceBrowser({
   page,job,localReferenceFile,outputDir,onProgress
 }){
-  const watcher=responseObserver(page);
+  const expectedModel=job.model||'Seedance 2.0 Mini';
+  const watcher=responseObserver(page,expectedModel);
   let confirmationMonitor=null;
   try{
     onProgress('选择 '+(job.model||'Seedance 2.0 Mini')+'、画面比例和时长',10);
@@ -413,7 +430,7 @@ export async function runSeedanceBrowser({
     // observed after the UI sends it. No hard-coded HAR session request.
     const send=await findSendButton(page,editor);
     const baselineCount=await page.getByRole('button',{name:/^下载(?:视频)?$/}).count();
-    confirmationMonitor=await watchNewVideoConfirmation(page);
+    confirmationMonitor=await watchNewVideoConfirmation(page,expectedModel);
     watcher.markSubmitted();
     watcher.start();
     const request=await submitAndObserve(page,send);
@@ -421,17 +438,45 @@ export async function runSeedanceBrowser({
     validateObservedSubmission(actual,job);
     const ack=await request.response();
     if(!ack||!ack.ok())throw new Error('豆包提交视频任务失败');
-    onProgress('豆包已接收生成请求，正在等待新视频',35);
+    onProgress('豆包已接收请求，等待确认是否真正开始生成视频',35);
 
     const deadline=Date.now()+35*60*1000;
+    const initialAcknowledgementDeadline=Date.now()+90000;
     let confirmationSent=false;
+    let confirmationRequest=null;
+    let confirmationAt=0;
+    let videoStarted=false;
     while(Date.now()<deadline){
+      if(!videoStarted&&
+        (watcher.generationStarted||await confirmationMonitor.started())){
+        videoStarted=true;
+        onProgress('视频已开始生成（'+expectedModel+'）',45,'started');
+      }
       if(!confirmationSent&&
+        !videoStarted&&
         (watcher.confirmationRequested||await confirmationMonitor.requested())){
         // Only one confirmation per generation job, even if Doubao repeats the
         // same assistant prompt in SSE and the visible chat simultaneously.
         confirmationSent=true;
-        await sendVideoConfirmation(page,onProgress);
+        confirmationRequest=await sendVideoConfirmation(page,onProgress);
+        confirmationAt=Date.now();
+      }
+      if(!videoStarted&&confirmationSent){
+        const confirmationReply=watcher.replyFor(confirmationRequest);
+        assertVideoStartReply(confirmationReply,expectedModel,{afterConfirmation:true});
+        if(Date.now()-confirmationAt>45000)
+          throw new Error('视频未开始生成：发送「确认」后 45 秒内未收到「本次使用 '+expectedModel+' 生成」的开工回复');
+      }else if(!videoStarted&&!confirmationSent){
+        const initialReply=watcher.replyFor(request);
+        if(!watcher.confirmationRequested&&
+          !await confirmationMonitor.requested())
+          assertVideoStartReply(initialReply,expectedModel);
+        if(Date.now()>initialAcknowledgementDeadline)
+          throw new Error('视频未开始生成：未收到「本次使用 '+expectedModel+' 生成」或明确的确认请求');
+      }
+      if(!videoStarted){
+        await page.waitForTimeout(500);
+        continue;
       }
       const downloadButtons=page.getByRole('button',{name:/^下载(?:视频)?$/});
       const fresh=await downloadButtons.count();
@@ -479,7 +524,7 @@ export async function runSeedanceBrowser({
       }
       await page.waitForTimeout(1800);
     }
-    throw new Error('已发送视频任务，但未在超时窗口内识别到本次生成的视频下载结果；浏览器保留供检查');
+    throw new Error('视频已开始生成，但未在超时窗口内识别到本次视频下载结果；浏览器保留供检查');
   }finally{
     watcher.stop();
     if(confirmationMonitor)await confirmationMonitor.stop();
