@@ -116,6 +116,9 @@ async function main(){
     if(health.museBridgeRevision!=='quota-auto-v6-image-resolution')
       throw new Error('端口 3701 的 TapNow API 尚未接入 Muse 独立浏览器。'+
         '请先关闭旧服务，再运行当前项目的 start.bat。');
+    if(health.museMediaRevision!=='fresh-chat-media-v2')
+      throw new Error('端口 3701 仍在运行旧版 Muse 图片回传服务。'+
+        '请先结束旧版 TapNow API 进程，再运行 start.bat。');
     if(health.referenceSelectionRevision!=='at-order-v2')
       throw new Error('端口 3701 仍在运行旧版图片引用逻辑，可能上传未 @ 的图片。'+
         '请先关闭旧服务再运行当前项目的 start.bat。');

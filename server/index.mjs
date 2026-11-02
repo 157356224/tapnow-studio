@@ -59,6 +59,7 @@ app.get('/api/health', (_req, res) => res.json({
   ok:true,mode:'local-canvas',aiProviders:0,
   browserBridges:['doubao-seedance-v2','muse-edge-chat'],
   museBridgeRevision:'quota-auto-v6-image-resolution',
+  museMediaRevision:'fresh-chat-media-v2',
   referenceSelectionRevision:'at-order-v2',
   multiImageUploadRevision:'v3-prompt-first',
   videoModelRevision:'mini-fast-v1',

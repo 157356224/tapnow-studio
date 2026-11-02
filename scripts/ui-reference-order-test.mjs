@@ -55,7 +55,8 @@ try{
       videoModelRevision:'mini-fast-v1',multiImageUploadRevision:'v3-prompt-first',
       videoStartRevision:'reply-prefix-v1',
       videoDownloadRevision:'completed-card-v1',
-      museBridgeRevision:'quota-auto-v6-image-resolution'})
+      museBridgeRevision:'quota-auto-v6-image-resolution',
+      museMediaRevision:'fresh-chat-media-v2'})
   }));
   await page.route('**/api/doubao/accounts',route=>route.fulfill({
     status:200,contentType:'application/json',

@@ -235,6 +235,25 @@ const assistantMessageSelector=[
   '.message-assistant'
 ].join(',');
 
+// Muse's current chat UI doesn't always provide a stable "assistant" role on
+// the generated media card. Snapshot existing media *after* user reference
+// previews have appeared but *before* prompt submission. Only media DOM nodes
+// created for this generation can use the fallback path.
+async function armMuseFreshMedia(page){
+  await page.evaluate(()=>{
+    const media=[...document.querySelectorAll('img,video')];
+    window.__tapnowMuseFreshMedia={
+      existing:new WeakSet(media),
+      urls:new Set(media.map(el=>el.currentSrc||el.src).filter(Boolean))
+    };
+  });
+}
+
+async function clearMuseFreshMedia(page){
+  await page.evaluate(()=>{delete window.__tapnowMuseFreshMedia;})
+    .catch(()=>{});
+}
+
 function isMusePromotionalMedia(src){
   if(!src||typeof src!=='string')return true;
   try{
@@ -248,15 +267,52 @@ function isMusePromotionalMedia(src){
 async function mediaCandidates(page,kind){
   return await page.evaluate(({kind,selector})=>{
     const accepted=kind==='video'?'video':'img';
+    const userSelector=[
+      '[data-message-author-role="user"]','[data-message-role="user"]',
+      '[data-role="user"]','[data-author="user"]','[data-sender="user"]',
+      '[data-testid="user-message"]','[data-hatch-role="user"]',
+      '[data-hatch-message-role="user"]','.user-message'
+    ].join(',');
+    const composerSelector=[
+      'form','[data-testid*="composer"]','[class*="composer"]'
+    ].join(',');
+    const editor=document.querySelector(
+      'textarea[data-hatch-composer-prehydration-input],'+
+      'textarea[aria-label="消息"],textarea[placeholder="消息"]');
+    const editorBox=editor?.getBoundingClientRect();
+    const fresh=window.__tapnowMuseFreshMedia;
     return [...document.querySelectorAll(accepted)].filter(el=>{
       const rect=el.getBoundingClientRect();
-      if(rect.width<160||rect.height<100)return false;
-      // Only an assistant response in the conversation is eligible.
-      if(!el.closest(selector))return false;
+      // Muse may render a generated 2K/4K image initially as a compact
+      // thumbnail; the original pixel size is verified below.
+      if(rect.width<(kind==='image'?112:160)||
+         rect.height<(kind==='image'?88:100))return false;
       // Reject UI, upload composer, promotion, onboarding and download-app
       // dialogs even if one of these happens to be inside a chat wrapper.
       if(el.closest('form,header,nav,aside,[role="dialog"],[aria-modal="true"],'+
         '[data-testid*="promo"],[data-testid*="onboarding"]'))return false;
+      if(el.closest(userSelector))return false;
+      if(kind==='image'&&!el.complete)return false;
+      const assistant=Boolean(el.closest(selector));
+      if(!assistant){
+        // An old image or an upload preview whose CDN URL changes is never
+        // a generated result. The snapshot is taken after uploads finish.
+        if(!fresh||fresh.existing.has(el)||
+          fresh.urls.has(el.currentSrc||el.src)||el.closest(composerSelector))
+          return false;
+        const inChatThread=Boolean(el.closest(
+          '[data-testid*="chat-message"],[data-testid*="conversation"],'+
+          '[data-testid*="message-list"],[class*="chat-messages"],'+
+          '[class*="conversation"]'
+        ));
+        // Some Muse layouts use div-only chat markup. Limit their fresh
+        // media to the conversation column above the message composer.
+        const inComposerColumn=Boolean(editorBox&&
+          rect.bottom<editorBox.top+90&&
+          rect.left>=editorBox.left-250&&
+          rect.right<=editorBox.right+350);
+        if(!inChatThread&&!inComposerColumn)return false;
+      }
       if(kind==='image')return el.complete&&el.naturalWidth>=256&&el.naturalHeight>=256;
       return !!(el.currentSrc||el.src);
     }).map(el=>({src:kind==='image'?el.currentSrc||el.src:el.currentSrc||el.src,
@@ -402,7 +458,12 @@ export async function runMuseBrowser({page,job,outputDir,onProgress,localReferen
   // Uploaded reference thumbnails must NEVER be mistaken for a generated
   // output. Snapshot the chat media only after attachment previews exist.
   const baseline=(await mediaCandidates(page,job.kind)).map(x=>x.src);
-  await sendMusePrompt(page,job);
-  onProgress('Muse 已触发生成，等待媒体结果',30);
-  return await waitForMuseMedia(page,job,outputDir,onProgress,{baseline});
+  await armMuseFreshMedia(page);
+  try{
+    await sendMusePrompt(page,job);
+    onProgress('Muse 已触发生成，等待媒体结果',30);
+    return await waitForMuseMedia(page,job,outputDir,onProgress,{baseline});
+  }finally{
+    await clearMuseFreshMedia(page);
+  }
 }

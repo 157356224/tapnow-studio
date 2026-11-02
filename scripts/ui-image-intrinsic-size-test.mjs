@@ -86,7 +86,8 @@ await page.route('**/api/doubao/accounts',route=>route.fulfill({
 }));
 await page.route('**/api/health',route=>route.fulfill({
   status:200,contentType:'application/json',
-  body:JSON.stringify({museBridgeRevision:'quota-auto-v6-image-resolution'})
+  body:JSON.stringify({museBridgeRevision:'quota-auto-v6-image-resolution',
+    museMediaRevision:'fresh-chat-media-v2'})
 }));
 await page.route('**/api/muse/quotas**',route=>route.fulfill({
   status:200,contentType:'application/json',

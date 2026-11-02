@@ -487,9 +487,13 @@ function Workspace() {
           source.data.referenceIds||[],referencesFor(id));
       }catch(e){notify((e as Error).message);return;}
       try{
-        const health=await request<{museBridgeRevision?:string}>('/api/health');
+        const health=await request<{
+          museBridgeRevision?:string;museMediaRevision?:string
+        }>('/api/health');
         if(health.museBridgeRevision!=='quota-auto-v6-image-resolution')
           throw new Error('当前 Muse API 是旧版本，请关闭旧 TapNow 服务并重新运行 start.bat');
+        if(health.museMediaRevision!=='fresh-chat-media-v2')
+          throw new Error('Muse 图片回传后端仍为旧版本，请先关闭旧 TapNow API 并重新运行 start.bat');
         // Persist the node's exact mode and current prompt before accepting
         // a job; debounce may otherwise overwrite the generated media.
         if(timer.current)clearTimeout(timer.current);

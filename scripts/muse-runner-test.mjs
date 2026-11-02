@@ -152,6 +152,67 @@ try{
   assert.match((await page.evaluate(()=>window.sent)).at(-1),/@图1/);
   assert.ok(!(await page.evaluate(()=>window.sent)).at(-1).includes('@图片2'),
     'Muse text should describe the attached reference instead of an application-specific @ token');
+  // Muse can render the generated image in a chat card WITHOUT a stable
+  // assistant role. Existing uploaded previews may even change URLs later;
+  // only a new media element is an eligible output.
+  await page.evaluate(()=>{
+    const oldNewChat=document.querySelector('#new-chat').onclick;
+    document.querySelector('#new-chat').onclick=event=>{
+      oldNewChat(event);
+      const preview=document.createElement('img');
+      preview.id='existing-upload-preview';
+      preview.width=350;preview.height=265;
+      const canvas=document.createElement('canvas');
+      canvas.width=512;canvas.height=512;
+      const ctx=canvas.getContext('2d');
+      ctx.fillStyle='#11aa22';ctx.fillRect(0,0,512,512);
+      preview.src=canvas.toDataURL('image/png');
+      document.querySelector('#ref-preview').appendChild(preview);
+    };
+    document.querySelector('#composer').onsubmit=event=>{
+      event.preventDefault();
+      window.sent.push(document.querySelector('#muse-editor').value);
+      const old=document.querySelector('#existing-upload-preview');
+      const canvas=document.createElement('canvas');
+      canvas.width=512;canvas.height=512;
+      const ctx=canvas.getContext('2d');
+      ctx.fillStyle='#55bb66';ctx.fillRect(0,0,512,512);
+      old.src=canvas.toDataURL('image/png');
+      const generated=document.createElement('img');
+      // The visible result may be only a small thumbnail even though the
+      // source is a valid 512x512 full-resolution image.
+      generated.width=140;generated.height=110;
+      ctx.fillStyle='#2233dd';ctx.fillRect(0,0,512,512);
+      generated.src=canvas.toDataURL('image/png');
+      const result=document.createElement('div');
+      result.className='muse-generated-image-card';
+      result.append(generated);
+      document.querySelector('#history').append(result);
+    };
+  });
+  const unlabeled=await runMuseBrowser({
+    page,job:{...job,prompt:'无 assistant 属性的最新生成图片'},
+    outputDir,onProgress:()=>{}
+  });
+  assert.match(unlabeled.mediaUrl,/^\/api\/uploads\/[a-f0-9-]+\.png$/);
+  const unlabeledFile=fs.readFileSync(path.join(outputDir,
+    path.basename(unlabeled.mediaUrl)));
+  const pixel=await page.evaluate(encoded=>{
+    const image=new Image();
+    image.src='data:image/png;base64,'+encoded;
+    return new Promise((resolve,reject)=>{
+      image.onload=()=>{
+        const canvas=document.createElement('canvas');
+        canvas.width=1;canvas.height=1;
+        canvas.getContext('2d').drawImage(image,0,0,1,1);
+        resolve(Array.from(canvas.getContext('2d').getImageData(0,0,1,1).data));
+      };
+      image.onerror=reject;
+    });
+  },unlabeledFile.toString('base64'));
+  assert.deepEqual(pixel.slice(0,3),[34,51,221],
+    'Save the newly generated unmarked Muse reply, not the old upload preview');
+  assert.equal(await page.evaluate(()=>window.newChatClicks),4);
   // When the only newly shown image is a promotional asset, fail closed.
   // The output folder must remain untouched and the app download button
   // must never be clicked by the fallback downloader.

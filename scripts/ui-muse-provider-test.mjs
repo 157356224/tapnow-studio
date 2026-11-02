@@ -48,7 +48,8 @@ const page=await browser.newPage({viewport:{width:1640,height:950}});
 try{
   await page.route('**/api/health',r=>r.fulfill({status:200,
     contentType:'application/json',body:JSON.stringify({
-      ok:true,museBridgeRevision:'quota-auto-v6-image-resolution',videoModelRevision:'mini-fast-v1'
+      ok:true,museBridgeRevision:'quota-auto-v6-image-resolution',
+      museMediaRevision:'fresh-chat-media-v2',videoModelRevision:'mini-fast-v1'
     })}));
   await page.route('**/api/projects**',async route=>{
     const req=route.request();
