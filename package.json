@@ -32,6 +32,7 @@
     "test:browser-cleanup": "node scripts/browser-cleanup-test.mjs",
     "test:multi-image": "node scripts/doubao-multi-reference-test.mjs",
     "test:video-prompt": "node scripts/doubao-prompt-richtext-test.mjs",
+    "test:video-prompt-format": "node scripts/video-prompt-format-test.mjs",
     "test:video-confirmation": "node scripts/doubao-confirmation-test.mjs",
     "test:video-start": "node scripts/doubao-video-start-test.mjs",
     "test:video-download": "node scripts/doubao-completed-video-test.mjs",

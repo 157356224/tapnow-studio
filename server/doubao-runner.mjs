@@ -15,6 +15,7 @@ import {setVideoDuration} from './doubao-duration.mjs';
 import {findSendButton,submitAndObserve} from './doubao-submit.mjs';
 import {
   hasVideoConfirmationInResponse,inspectVideoStartReply,assertVideoStartReply,
+  inspectPostConfirmationGenerateCue,shouldSendPostConfirmationGenerate,
   watchNewVideoConfirmation
 } from './doubao-confirmation.mjs';
 import {
@@ -379,6 +380,7 @@ function responseObserver(page,expectedModel){
         for(const id of findVideoIds(text))videoIds.add(id);
         if(hasVideoConfirmationInResponse(text))confirmationRequested=true;
         const reply=inspectVideoStartReply(text,expectedModel);
+        reply.needsGenerate=inspectPostConfirmationGenerateCue(text)&&!reply.started;
         if(reply.started)generationStarted=true;
         chatReplies.set(response.request(),reply);
         lastChatReply={request:response.request(),...reply};
@@ -603,6 +605,21 @@ export async function sendVideoConfirmation(page,onProgress=()=>{}){
   return request;
 }
 
+export async function sendVideoGenerate(page,onProgress=()=>{}){
+  onProgress('豆包回复了已确认设定但未真正开工，自动发送「生成」',41);
+  // A single short follow-up message in the same conversation. Do not
+  // re-upload assets, reapply settings, or submit the original video prompt.
+  const editor=await fillVideoPrompt(page,'生成');
+  await editor.press('Escape').catch(()=>{});
+  const button=await findSendButton(page,editor);
+  const request=await submitAndObserve(page,button);
+  const ack=await request.response();
+  if(!ack||!ack.ok())
+    throw new Error('豆包已确认设定，但「生成」补发请求失败');
+  onProgress('已发送「生成」，正在确认 Seedance 是否真正启动',43);
+  return request;
+}
+
 export async function runSeedanceBrowser({
   page,job,localReferenceFile,outputDir,onProgress
 }){
@@ -636,6 +653,8 @@ export async function runSeedanceBrowser({
     let confirmationSent=false;
     let confirmationRequest=null;
     let confirmationAt=0;
+    let generateSent=false;
+    let generateAt=0;
     let videoStarted=false;
     let completionObservedAt=0;
     let lastDownloadAttempt=0;
@@ -653,14 +672,40 @@ export async function runSeedanceBrowser({
         // Only one confirmation per generation job, even if Doubao repeats the
         // same assistant prompt in SSE and the visible chat simultaneously.
         confirmationSent=true;
+        await confirmationMonitor.armAfterConfirmation();
         confirmationRequest=await sendVideoConfirmation(page,onProgress);
         confirmationAt=Date.now();
       }
       if(!videoStarted&&confirmationSent){
-        const confirmationReply=watcher.replyFor(confirmationRequest);
-        assertVideoStartReply(confirmationReply,expectedModel,{afterConfirmation:true});
-        if(Date.now()-confirmationAt>45000)
-          throw new Error('视频未开始生成：发送「确认」后 45 秒内未收到「本次使用 '+expectedModel+' 生成」的开工回复');
+        if(!generateSent){
+          const confirmationReply=watcher.replyFor(confirmationRequest);
+          const domCue=!confirmationReply?.started&&
+            await confirmationMonitor.followUpCue();
+          const followUpReply=domCue
+            ?{hasReplyText:true,needsGenerate:true,started:false}
+            :confirmationReply;
+          if(shouldSendPostConfirmationGenerate({
+            confirmationSent,generateSent,videoStarted,reply:followUpReply
+          })){
+            // Only the *reply to this confirmation request* is eligible.
+            // Mark before sending: repeating ✅ in a DOM/SSE update cannot
+            // accidentally submit another "生成".
+            generateSent=true;
+            await sendVideoGenerate(page,onProgress);
+            generateAt=Date.now();
+          }else{
+            // A completed HTTP response can precede a DOM-rendered checklist.
+            // Do not reject on the first assistant text: keep polling for ✅
+            // or the real video-start signal until the confirmation deadline.
+            if(Date.now()-confirmationAt>45000)
+              throw new Error('视频未开始生成：发送「确认」后 45 秒内未收到开工或 ✅ 提示');
+          }
+        }else{
+          // Similarly, the first reply after "生成" may be a progress note.
+          // Only actual Seedance start/finished-video evidence completes it.
+          if(Date.now()-generateAt>45000)
+            throw new Error('视频未开始生成：补发「生成」后 45 秒内未收到「本次使用 '+expectedModel+' 生成」的开工回复');
+        }
       }else if(!videoStarted&&!confirmationSent){
         const initialReply=watcher.replyFor(request);
         if(!watcher.confirmationRequested&&

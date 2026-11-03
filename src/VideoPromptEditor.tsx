@@ -3,6 +3,7 @@ import type {CompositionEvent,KeyboardEvent} from 'react';
 import {createPortal} from 'react-dom';
 import {Image as ImageIcon,AudioLines,Plus,Search,ChevronLeft,ChevronRight} from 'lucide-react';
 import {reorderReferenceNodes} from './doubao';
+import {serializePromptEditor} from './prompt-editor-text.mjs';
 import type {ReferenceNode} from './doubao';
 
 type Props={
@@ -14,14 +15,6 @@ type Props={
   onRemove:(id:string)=>void;
   onReorder:(id:string,direction:-1|1,currentPrompt:string)=>void;
 };
-
-function editorText(node:Node):string{
-  if(node instanceof HTMLElement&&node.dataset.token)return node.dataset.token;
-  if(node.nodeType===Node.TEXT_NODE)return node.textContent||'';
-  if(node.nodeName==='BR')return '\n';
-  return [...node.childNodes].map(editorText).join('')+
-    (node.nodeName==='DIV'?'\n':'');
-}
 
 function makeMediaChip(ref:ReferenceNode){
   const chip=document.createElement('span');
@@ -108,7 +101,7 @@ export function VideoPromptEditor({
     const prefix=document.createRange();
     prefix.selectNodeContents(el);
     prefix.setEnd(range.startContainer,range.startOffset);
-    const match=editorText(prefix.cloneContents()).match(/@([^@\s]*)$/);
+    const match=serializePromptEditor(prefix.cloneContents()).match(/@([^@\s]*)$/);
     return match?match[1]:null;
   };
   const updateMentionPicker=()=>{
@@ -156,19 +149,19 @@ export function VideoPromptEditor({
     const mapping=references.map(ref=>ref.id+':'+ref.token+':'+ref.url+':'+ref.title).join('|');
     const orderChanged=mapping!==renderedReferenceMap.current;
     if(!el||composing.current||(document.activeElement===el&&!orderChanged))return;
-    const now=editorText(el).replace(/\n$/,'');
+    const now=serializePromptEditor(el,true).replace(/\n$/,'');
     if(orderChanged||now!==prompt||el.querySelectorAll('.tn-inline-ref').length!==
       (prompt.match(/@(图片|音频)\d+/g)||[]).filter(token=>references.some(r=>r.token===token)).length){
       renderReferences(el,prompt,references);
     }
-    setHasContent(Boolean(editorText(el).trim()));
+    setHasContent(Boolean(serializePromptEditor(el,true).trim()));
     latestPrompt.current=prompt;
     renderedReferenceMap.current=mapping;
   },[prompt,references]);
 
   const commit=()=>{
     if(!editor.current)return;
-    const text=editorText(editor.current).replace(/\n$/,'');
+    const text=serializePromptEditor(editor.current,true).replace(/\n$/,'');
     latestPrompt.current=text;
     setHasContent(Boolean(text.trim()));
     captureCaret();
@@ -243,7 +236,7 @@ export function VideoPromptEditor({
   };
   const moveReference=(id:string,direction:-1|1)=>{
     const currentPrompt=editor.current
-      ?editorText(editor.current).replace(/\n$/,''):latestPrompt.current;
+      ?serializePromptEditor(editor.current,true).replace(/\n$/,''):latestPrompt.current;
     const next=reorderReferenceNodes(currentPrompt,references,id,direction);
     if(next.order.every((source,index)=>references[index]?.id===source))return;
     const byId=new Map(references.map(ref=>[ref.id,ref]));
