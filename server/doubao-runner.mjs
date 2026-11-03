@@ -380,7 +380,9 @@ function responseObserver(page,expectedModel){
         for(const id of findVideoIds(text))videoIds.add(id);
         if(hasVideoConfirmationInResponse(text))confirmationRequested=true;
         const reply=inspectVideoStartReply(text,expectedModel);
-        reply.needsGenerate=inspectPostConfirmationGenerateCue(text)&&!reply.started;
+        // response.text() has finished: only a complete response to the
+        // current "确认" POST may authorize the single "生成" follow-up.
+        reply.needsGenerate=inspectPostConfirmationGenerateCue(text);
         if(reply.started)generationStarted=true;
         chatReplies.set(response.request(),reply);
         lastChatReply={request:response.request(),...reply};
@@ -672,33 +674,25 @@ export async function runSeedanceBrowser({
         // Only one confirmation per generation job, even if Doubao repeats the
         // same assistant prompt in SSE and the visible chat simultaneously.
         confirmationSent=true;
-        await confirmationMonitor.armAfterConfirmation();
         confirmationRequest=await sendVideoConfirmation(page,onProgress);
         confirmationAt=Date.now();
       }
       if(!videoStarted&&confirmationSent){
         if(!generateSent){
           const confirmationReply=watcher.replyFor(confirmationRequest);
-          const domCue=!confirmationReply?.started&&
-            await confirmationMonitor.followUpCue();
-          const followUpReply=domCue
-            ?{hasReplyText:true,needsGenerate:true,started:false}
-            :confirmationReply;
           if(shouldSendPostConfirmationGenerate({
-            confirmationSent,generateSent,videoStarted,reply:followUpReply
+            confirmationSent,generateSent,videoStarted,reply:confirmationReply
           })){
-            // Only the *reply to this confirmation request* is eligible.
-            // Mark before sending: repeating ✅ in a DOM/SSE update cannot
-            // accidentally submit another "生成".
+            // Only the complete reply to this confirmation POST is eligible.
+            // Set the guard before awaiting the send to prevent duplicates.
             generateSent=true;
             await sendVideoGenerate(page,onProgress);
             generateAt=Date.now();
           }else{
-            // A completed HTTP response can precede a DOM-rendered checklist.
-            // Do not reject on the first assistant text: keep polling for ✅
-            // or the real video-start signal until the confirmation deadline.
+            // Wait for a complete reply or the real Seedance start signal.
+            // A delayed/empty ACK must never trigger a premature follow-up.
             if(Date.now()-confirmationAt>45000)
-              throw new Error('视频未开始生成：发送「确认」后 45 秒内未收到开工或 ✅ 提示');
+              throw new Error('视频未开始生成：发送「确认」后 45 秒内未收到完整回复或 Seedance 开工回执');
           }
         }else{
           // Similarly, the first reply after "生成" may be a progress note.

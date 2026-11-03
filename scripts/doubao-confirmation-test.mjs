@@ -43,20 +43,36 @@ assert.equal(inspectPostConfirmationGenerateCue(
 assert.equal(inspectPostConfirmationGenerateCue(
   assistantStream([screenshotReply2])),true);
 assert.equal(inspectPostConfirmationGenerateCue(
-  assistantStream(['已经确认参数，请稍等片刻。'])),false,
-  '请稍等片刻 alone must never trigger a follow-up');
+  assistantStream(['已经确认参数，请稍等片刻。'])),true,
+  'Any complete non-start reply should trigger, with or without ✅');
 assert.equal(inspectPostConfirmationGenerateCue(
   assistantStream(['✅设定已经确认'])),true,
-  'Only ✅ should trigger the follow-up');
+  'The presence of ✅ is irrelevant to the new decision');
 assert.equal(inspectPostConfirmationGenerateCue(
-  assistantStream(['请修改提示词后重试。'])),false);
+  assistantStream(['请修改提示词后重试。'])),true);
 assert.equal(inspectPostConfirmationGenerateCue(
-  assistantStream(['生成任务已经开始'])),false);
+  assistantStream(['生成任务已经开始'])),true);
 assert.equal(inspectPostConfirmationGenerateCue(
-  assistantStream(['完成'])+'data: '+JSON.stringify({role:'user',content:screenshotReply1})+'\n\n'),false,
-  'An echoed user message is not a new assistant follow-up');
+  assistantStream(['收到，参数和图片已经锁定，正在生成中。'])),true,
+  'No fixed emoji or wait phrase is required');
+assert.equal(inspectPostConfirmationGenerateCue(
+  assistantStream(['本次使用 **Seedance 2.0 Mini** 生成 10 秒视频'])),false,
+  'A genuine Seedance start acknowledgement must suppress the follow-up');
+assert.equal(inspectPostConfirmationGenerateCue(
+  assistantStream(['本次使用 **Seedance 2.0 Fast** 生成 10 秒视频'])),false,
+  'A wrong-model Seedance acknowledgement must not trigger duplicate generation');
+assert.equal(inspectPostConfirmationGenerateCue(
+  assistantStream(['本次使','用 **Seedance',' 2.0 Mini** 生成 10 秒视频'])),false,
+  'Split streaming fragments must be joined before deciding');
+assert.equal(inspectPostConfirmationGenerateCue(
+  'event: SSE_MESSAGE\ndata: '+
+    JSON.stringify({message:{role:'user',content:screenshotReply1}})+'\n\n'),false,
+  'An echoed user message must never influence the decision');
 assert.equal(inspectPostConfirmationGenerateCue(
   assistantStream([])),false);
+assert.equal(inspectPostConfirmationGenerateCue(
+  'event: SSE_ACK\ndata: {}\n\n'),false,
+  'An empty acknowledgement must not trigger the follow-up');
 const followUpReply={hasReplyText:true,started:false,needsGenerate:true};
 assert.equal(shouldSendPostConfirmationGenerate({
   confirmationSent:true,reply:followUpReply
@@ -70,6 +86,9 @@ assert.equal(shouldSendPostConfirmationGenerate({
 assert.equal(shouldSendPostConfirmationGenerate({
   confirmationSent:true,videoStarted:true,reply:followUpReply
 }),false,'No follow-up after video start is confirmed');
+assert.equal(shouldSendPostConfirmationGenerate({
+  confirmationSent:true,reply:{...followUpReply,hasReplyText:false}
+}),false,'The current confirmation must have a nonempty completed assistant reply');
 assert.equal(shouldSendPostConfirmationGenerate({
   confirmationSent:true,reply:{...followUpReply,started:true}
 }),false,'Already-started assistant reply must not cause a follow-up');
@@ -122,40 +141,6 @@ try{
   });
   assert.equal(await monitor.requested(),true,
     'Only a newly added assistant message can request auto-confirmation');
-  await page.evaluate(()=>{
-    const oldChecklist=document.createElement('div');
-    oldChecklist.dataset.messageAuthorRole='assistant';
-    oldChecklist.textContent='✅ 角色固定，请稍等片刻';
-    document.querySelector('#history').appendChild(oldChecklist);
-  });
-  await monitor.armAfterConfirmation();
-  assert.equal(await monitor.followUpCue(),false,
-    'Old assistant checklists must not trigger follow-up');
-  await page.evaluate(()=>{
-    const user=document.createElement('div');
-    user.dataset.messageAuthorRole='user';
-    user.textContent='✅ 我自己的原始提示词里写了请稍等片刻';
-    document.querySelector('#conversation').appendChild(user);
-  });
-  assert.equal(await monitor.followUpCue(),false,
-    'New user messages with ✅ must not trigger follow-up');
-  await page.evaluate(()=>{
-    const assistant=document.createElement('div');
-    assistant.dataset.messageAuthorRole='assistant';
-    document.querySelector('#conversation').appendChild(assistant);
-    assistant.textContent='收到，已经确认参数。请稍等片刻。';
-  });
-  assert.equal(await monitor.followUpCue(),false,
-    'A fresh assistant reply with only 请稍等片刻 is not sufficient');
-  await page.evaluate(()=>{
-    const assistant=document.createElement('div');
-    // Real Doubao DOM entries can be missing all assistant-role markers.
-    assistant.className='markdown prose';
-    document.querySelector('#conversation').appendChild(assistant);
-    assistant.textContent='好，已经确认全部设定，现在启动视频生成：✅ 图1 ✅ 图2';
-  });
-  assert.equal(await monitor.followUpCue(),true,
-    'A newly appended, unmarked Doubao reply containing ✅ must be recognized');
   await sendVideoConfirmation(page,(message,progress)=>{
     messages.push({message,progress});
   });
@@ -179,53 +164,7 @@ try{
   assert.equal(await second.requested(),false,
     'Re-arming should never inherit a prior task\'s confirmation state');
   await second.stop();
-  // Reusing an existing streaming reply node can update its text rather than
-  // append a new assistant element. A new ✅ must still be noticed.
-  await page.evaluate(()=>{
-    const placeholder=document.createElement('div');
-    placeholder.id='streaming-reply';
-    placeholder.textContent='正在处理请求';
-    document.querySelector('#conversation').appendChild(placeholder);
-  });
-  const streamed=await watchNewVideoConfirmation(page);
-  await streamed.armAfterConfirmation();
-  await page.evaluate(()=>{
-    document.querySelector('#streaming-reply').firstChild.textContent=
-      '已确认参数，✅ 角色和场景均已锁定';
-  });
-  assert.equal(await streamed.followUpCue(),true,
-    'Streaming an ✅ into an existing reply element should trigger');
-  await streamed.stop();
-  // Some emoji renderers replace ✅ with <img alt="✅"> rather than text.
-  const emoji=await watchNewVideoConfirmation(page);
-  await emoji.armAfterConfirmation();
-  await page.evaluate(()=>{
-    const reply=document.createElement('div');
-    reply.className='markdown';
-    const icon=document.createElement('img');
-    icon.alt='✅';
-    reply.appendChild(icon);
-    document.querySelector('#conversation').appendChild(reply);
-  });
-  assert.equal(await emoji.followUpCue(),true,'Emoji image alt text should trigger');
-  await emoji.stop();
-  // A response can render its checklist BEFORE the HTTP acknowledgement.
-  // The production runner now arms the observer before clicking "确认".
-  const fast=await watchNewVideoConfirmation(page);
-  await fast.armAfterConfirmation();
-  await page.evaluate(()=>{
-    document.querySelector('#send').addEventListener('click',()=>{
-      const message=document.createElement('div');
-      message.className='markdown';
-      message.textContent='✅ 本次确认全部设定';
-      document.querySelector('#conversation').appendChild(message);
-    },{once:true});
-  });
-  await sendVideoConfirmation(page);
-  assert.equal(await fast.followUpCue(),true,
-    'A ✅ inserted before the request response resolves cannot be missed');
-  await fast.stop();
-  console.log('PASS: confirmation and single 生成 POST, ✅-only cue, unmarked DOM reply, no old/user/duplicate triggers');
+  console.log('PASS: confirmation and single 生成 POST, any completed non-Seedance reply, empty/user/start replies ignored');
 }finally{
   await browser.close();
 }

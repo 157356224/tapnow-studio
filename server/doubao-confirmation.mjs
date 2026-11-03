@@ -73,12 +73,21 @@ export function inspectVideoStartReply(body,expectedModel){
   };
 }
 
-// After sending "确认", a fresh assistant reply containing ✅ is the only
-// follow-up cue. Phrases such as 请稍等片刻 are NOT a trigger.
-// Never inspect the original user prompt or historical chat messages.
+// Once the current "确认" request has received its COMPLETE assistant reply,
+// send "生成" if that reply is not the Seedance start announcement. A
+// streaming fragment or an empty acknowledgement is not a reply. No emoji
+// or reassurance sentence is required.
+// This helper is deliberately limited to assistant text in the response body:
+// request payloads and historical chat messages are never inspected.
 export function inspectPostConfirmationGenerateCue(body){
-  const text=assistantReplyFragments(body).join('');
-  return text.includes('✅');
+  const fragments=assistantReplyFragments(body);
+  if(!fragments.some(part=>compact(part).length>0))return false;
+  const announcesStart=part=>
+    /^本次使用Seedance/.test(compact(part).replace(/\*\*/g,''));
+  // Some SSE responses emit split deltas, others cumulative text snapshots.
+  // If any text announces Seedance has started, do not send a duplicate,
+  // including the case where the model name differs from the selected model.
+  return !fragments.some(announcesStart)&&!announcesStart(fragments.join(''));
 }
 
 export function shouldSendPostConfirmationGenerate({
@@ -151,19 +160,7 @@ export async function watchNewVideoConfirmation(page,expectedModel='Seedance 2.0
     ].join(',');
     let requested=false;
     let generationStarted=false;
-    let afterConfirmation=false;
-    let followUpCue=false;
-    let existingElements=new WeakSet();
-    const armFollowUp=()=>{
-      // Arm BEFORE posting "确认". Some replies arrive before the upload
-      // acknowledgement; a later arm would permanently miss their DOM nodes.
-      // Snapshot all existing elements, not just ones with assistant markers:
-      // real Doubao chat entries need not expose assistant-role attributes.
-      existingElements=new WeakSet(document.querySelectorAll('*'));
-      afterConfirmation=true;
-      followUpCue=false;
-    };
-    const check=(node,oldValue)=>{
+    const check=node=>{
       const element=node?.nodeType===Node.TEXT_NODE?
         node.parentElement:node;
       if(!element||element.nodeType!==Node.ELEMENT_NODE)return;
@@ -182,18 +179,6 @@ export async function watchNewVideoConfirmation(page,expectedModel='Seedance 2.0
           compactText(text).replace(/\*\*/g,''));
         if(started&&model==='Seedance 2.0 '+started[1])
           generationStarted=true;
-        const introducedCheckmark=typeof oldValue==='string'&&
-          !oldValue.includes('✅')&&(node.textContent||'').includes('✅');
-        const newlyInserted=!existingElements.has(current);
-        const renderedCheckmark=text.includes('✅')||
-          Boolean(element.matches('img[alt*="✅"],[aria-label*="✅"]')||
-            element.querySelector('img[alt*="✅"],[aria-label*="✅"]'));
-        if(afterConfirmation&&!generationStarted&&renderedCheckmark&&
-          (newlyInserted||introducedCheckmark)){
-          // Doubao chat entries are sometimes unmarked or rendered with an
-          // emoji <img alt="✅">. Trust only new post-confirmation DOM changes.
-          followUpCue=true;
-        }
         if(compactText(text).includes(phrase)){
           requested=true;
           return;
@@ -205,19 +190,15 @@ export async function watchNewVideoConfirmation(page,expectedModel='Seedance 2.0
       // reply must still be checked for the actual Seedance start sentence.
       if(requested&&generationStarted)return;
       for(const record of records){
-        if(record.type==='characterData')check(record.target,record.oldValue);
+        if(record.type==='characterData')check(record.target);
         for(const node of record.addedNodes)check(node);
         if(requested&&generationStarted)break;
       }
     });
-    observer.observe(document.body,{
-      subtree:true,childList:true,characterData:true,characterDataOldValue:true
-    });
+    observer.observe(document.body,{subtree:true,childList:true,characterData:true});
     window.__tapnowVideoConfirmMonitor={
       get requested(){return requested;},
       get generationStarted(){return generationStarted;},
-      get followUpCue(){return followUpCue;},
-      armFollowUp,
       stop(){observer.disconnect();}
     };
   },expectedModel);
@@ -229,14 +210,6 @@ export async function watchNewVideoConfirmation(page,expectedModel='Seedance 2.0
     async started(){
       return page.evaluate(()=>
         Boolean(window.__tapnowVideoConfirmMonitor?.generationStarted)).catch(()=>false);
-    },
-    async armAfterConfirmation(){
-      await page.evaluate(()=>
-        window.__tapnowVideoConfirmMonitor?.armFollowUp?.());
-    },
-    async followUpCue(){
-      return page.evaluate(()=>
-        Boolean(window.__tapnowVideoConfirmMonitor?.followUpCue)).catch(()=>false);
     },
     async stop(){
       await page.evaluate(()=>{
