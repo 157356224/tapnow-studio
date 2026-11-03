@@ -445,7 +445,7 @@ function Workspace() {
   // when a reference input/order changed (not on every canvas drag/typing).
   const referenceSignature=useMemo(()=>[
     ...edges.map(e=>e.target+':'+e.source),
-    ...nodes.filter(n=>n.data.kind==='image')
+    ...nodes.filter(n=>n.data.kind==='image'||n.data.kind==='audio')
       .map(n=>n.id+':'+(n.data.mediaUrl||'')+':'+n.data.title),
     ...nodes.filter(n=>n.data.referenceOrder?.length)
       .map(n=>n.id+':'+n.data.referenceOrder?.join(','))
@@ -488,12 +488,15 @@ function Workspace() {
       }catch(e){notify((e as Error).message);return;}
       try{
         const health=await request<{
-          museBridgeRevision?:string;museMediaRevision?:string
+          museBridgeRevision?:string;museMediaRevision?:string;
+          audioReferenceRevision?:string
         }>('/api/health');
         if(health.museBridgeRevision!=='quota-auto-v6-image-resolution')
           throw new Error('当前 Muse API 是旧版本，请关闭旧 TapNow 服务并重新运行 start.bat');
         if(health.museMediaRevision!=='fresh-chat-media-v2')
           throw new Error('Muse 图片回传后端仍为旧版本，请先关闭旧 TapNow API 并重新运行 start.bat');
+        if(museRefs.some(ref=>ref.kind==='audio')&&health.audioReferenceRevision!=='mixed-media-v1')
+          throw new Error('Muse 音频引用需要新版 API，请先关闭旧版 TapNow 并重新运行 start.bat');
         // Persist the node's exact mode and current prompt before accepting
         // a job; debounce may otherwise overwrite the generated media.
         if(timer.current)clearTimeout(timer.current);
@@ -565,9 +568,15 @@ function Workspace() {
       try{
         const health=await request<{multiImageUploadRevision?:string;videoModelRevision?:string;
           videoStartRevision?:string;videoDownloadRevision?:string;
-          referenceSelectionRevision?:string}>('/api/health');
+          referenceSelectionRevision?:string;audioReferenceRevision?:string;
+          audioMp4Revision?:string}>('/api/health');
         if(health.referenceSelectionRevision!=='at-order-v2')
           throw new Error('本地视频 API 是旧版本，参考图排序可能错误；请重启 TapNow。');
+        if(refs.some(ref=>ref.kind==='audio')&&health.audioReferenceRevision!=='mixed-media-v1')
+          throw new Error('豆包音频引用需要新版 API，请关闭旧版 TapNow 后重新运行 start.bat');
+        if(refs.some(ref=>ref.kind==='audio'&&/\.mp3(?:\?|$)/i.test(ref.url))&&
+          health.audioMp4Revision!=='mp3-to-mp4-v1')
+          throw new Error('豆包 MP3 转 MP4 功能尚未加载，请重启 TapNow 的 API 服务');
         if(health.videoModelRevision!=='mini-fast-v1')
           throw new Error('本地豆包 API 仍是旧版，可能错误选用 Fast。请先退出旧的 TapNow API 并重新运行当前项目 start.bat。');
         if(health.videoStartRevision!=='reply-prefix-v1')
@@ -1116,7 +1125,7 @@ function Workspace() {
           {!selected?<div className="empty-state">选择画布上的节点来编辑属性。</div>:<div className="inspector-body">
             <label>节点名称<input value={selected.data.title} onChange={e=>update(selected.id,{title:e.target.value})}/></label>
             <label>节点类型<div className="readonly-field">{kindLabels[selected.data.kind]}</div></label>
-            {selected.data.kind!=='text'&&<>
+      {selected.data.kind!=='text'&&selected.data.kind!=='audio'&&<>
               {selected.data.kind==='image'&&
                 <label>生成方式<div className="readonly-field">Muse 生图</div></label>}
               {selected.data.kind==='video'&&
@@ -1175,12 +1184,12 @@ function Workspace() {
             </>}
             {selected.data.kind==='text'&&<label>文本内容<textarea rows={14} value={selected.data.text || ''} onChange={e=>update(selected.id,{text:e.target.value})}/></label>}
             <label className="check-label"><input type="checkbox" checked={!!selected.data.bypass} onChange={e=>update(selected.id,{bypass:e.target.checked})}/> 运行工作流时跳过此节点</label>
-            <button className="inspector-generate" onClick={()=>void generate(selected.id)}><WandSparkles size={16}/>
+            {selected.data.kind!=='audio'&&<button className="inspector-generate" onClick={()=>void generate(selected.id)}><WandSparkles size={16}/>
               {(selected.data.provider||(selected.data.kind==='image'?'muse':'doubao'))==='muse'&&
                 ['image','video'].includes(selected.data.kind)
                 ?'发送到 Muse 生成'+(selected.data.kind==='video'?'视频':'图片')
                 :selected.data.kind==='video'?'发送到豆包生成视频':'生成演示结果'}
-            </button>
+            </button>}
             <button className="inspector-delete" onClick={()=>remove(selected.id)}><Trash2 size={15}/> 删除节点</button>
           </div>}
         </>}

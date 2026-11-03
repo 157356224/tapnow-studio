@@ -3,9 +3,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
+import {convertMp3ToMp4} from './mp3-to-mp4.mjs';
 import {
   findVideoIds,getSignedVideoDownload,inspectVideoSubmission,
-  parseSseEvents,validateImageReferences,validateObservedSubmission
+  parseSseEvents,validateImageReferences,validateMediaReferences,validateObservedSubmission
 } from './doubao-protocol.mjs';
 import {
   selectSeedanceModel,clickFirstVisible,clickVisibleOption,ensureVideoGenerationMode
@@ -158,6 +159,130 @@ export async function uploadReference(page,ref,localReferenceFile,onProgress){
     );
     await page.waitForTimeout(350);
   }finally{monitor.close();}
+}
+
+// Audio has a different picker and acknowledgement path from the image cards.
+// Never fall back to an image-only input; otherwise Playwright can set files
+// without the website actually creating a usable audio attachment.
+export async function uploadAudioReference(page,ref,localReferenceFile,onProgress=()=>{}){
+  const filename=localReferenceFile(ref.url);
+  if(!filename||!fs.existsSync(filename))throw new Error('参考音频不在本地素材库：'+ref.name);
+  if(!/\.(mp3|wav|m4a|ogg|aac|flac|webm)$/i.test(filename))
+    throw new Error('参考音频需为 MP3、WAV、M4A、OGG、AAC、FLAC 或 WebM：'+ref.name);
+  if(path.extname(filename).toLowerCase()==='.mp3')
+    return uploadMp3AsMp4(page,ref,filename,onProgress);
+  const monitor=observeImageUpload(page);
+  const beforeAudio=await page.locator('audio').count();
+  const previousName=await page.getByText(path.basename(filename),{exact:false}).count();
+  try{
+    const findAudioPicker=async()=>{
+      const fields=page.locator('input[type="file"]');
+      const available=await fields.evaluateAll(elements=>elements.map((el,index)=>({
+        index,accept:(el.getAttribute('accept')||'').toLowerCase(),disabled:el.disabled
+      })));
+      const matched=available.filter(x=>!x.disabled&&
+        /audio\/|\.mp3|\.wav|\.m4a|\.ogg|\.aac|\.flac/.test(x.accept));
+      return matched.length?fields.nth(matched[0].index):null;
+    };
+    let input=await findAudioPicker();
+    let chosen=false;
+    if(!input){
+      const chooserPromise=page.waitForEvent('filechooser',{timeout:3000}).catch(()=>null);
+      const clicked=await expandMenu(page,[/上传音频|添加音频|音频文件|添加附件|上传文件|本地文件/]);
+      const chooser=clicked?await chooserPromise:null;
+      if(chooser){
+        const accept=await chooser.element().getAttribute('accept')||'';
+        if(accept&&/image\//i.test(accept)&&!/audio\//i.test(accept))
+          throw new Error('豆包上传入口只接受图片，不支持该参考音频');
+        await chooser.setFiles(filename);chosen=true;
+      }else input=await findAudioPicker();
+    }
+    if(!chosen){
+      if(!input)throw new Error('豆包当前视频输入框没有参考音频上传控件');
+      await input.setInputFiles(filename,{timeout:15000});
+    }
+    onProgress('已选择参考音频，等待豆包确认附件',22);
+    const uploaded=await waitForNewResponse(page,monitor.stored,0,30000);
+    if(!uploaded||!uploaded.ok())throw new Error('豆包没有确认音频文件上传完成');
+    const deadline=Date.now()+18000;
+    while(Date.now()<deadline){
+      const handled=monitor.handled.find(response=>response.ok());
+      const displayed=await page.locator('audio').count()>beforeAudio||
+        await page.getByText(path.basename(filename),{exact:false}).count()>previousName;
+      if(handled||displayed)return;
+      const failed=monitor.handled.find(response=>!response.ok());
+      if(failed)throw new Error('豆包未接受参考音频（HTTP '+failed.status()+'）');
+      await page.waitForTimeout(180);
+    }
+    throw new Error('音频文件已传输，但豆包未显示或确认该音频附件；生成已停止');
+  }finally{monitor.close();}
+}
+
+/** Convert only the outgoing MP3 attachment; original canvas media is unchanged. */
+export async function uploadMp3AsMp4(page,ref,source,onProgress=()=>{}){
+  onProgress('正在将参考音频转换为带音轨的 MP4 视频：'+ref.name,13);
+  const converted=await convertMp3ToMp4(source);
+  const monitor=observeImageUpload(page);
+  try{
+    const previousVideos=await page.locator('video').count();
+    const previousImages=await page.locator('img').count();
+    const uploadedFilename=path.basename(converted.filename);
+    const previousName=await page.getByText(uploadedFilename,{exact:false}).count();
+    const inputs=page.locator('input[type="file"]');
+    const findVideoPicker=async()=>{
+      const available=await inputs.evaluateAll(elements=>elements.map((el,index)=>({
+        index,accept:(el.getAttribute('accept')||'').toLowerCase(),disabled:el.disabled
+      })));
+      const matches=available.filter(entry=>!entry.disabled&&(
+        /video\/|\.mp4|\.mov|\.webm/.test(entry.accept)||!entry.accept
+      )).sort((a,b)=>Number(/video\/|\.mp4/.test(b.accept))-
+        Number(/video\/|\.mp4/.test(a.accept)));
+      return matches.length?inputs.nth(matches[0].index):null;
+    };
+    let picker=await findVideoPicker();
+    let picked=false;
+    if(!picker){
+      const chooserPromise=page.waitForEvent('filechooser',{timeout:3000}).catch(()=>null);
+      const clicked=await expandMenu(page,[/上传视频|本地视频|添加视频|上传素材|上传文件|本地文件/]);
+      const chooser=clicked?await chooserPromise:null;
+      if(chooser){
+        const accept=(await chooser.element().getAttribute('accept')||'').toLowerCase();
+        if(accept&&!(/video\/|\.mp4|\.mov|\.webm/.test(accept)))
+          throw new Error('豆包当前上传入口不接受 MP4 视频：'+accept);
+        await chooser.setFiles(converted.filename);
+        picked=true;
+      }else picker=await findVideoPicker();
+    }
+    if(!picked){
+      if(!picker)throw new Error('豆包当前视频生成输入框没有 MP4 视频上传控件');
+      // Do not dispatch an empty React change event that might remove prior references.
+      await picker.evaluate(element=>{element.value='';});
+      await picker.setInputFiles(converted.filename,{timeout:15000});
+    }
+    onProgress('MP3 已转换为 MP4，正在上传视频附件：'+ref.name,20);
+    const uploaded=await waitForNewResponse(page,monitor.stored,0,75000);
+    if(!uploaded||!uploaded.ok())
+      throw new Error('豆包没有确认 MP4 视频上传'+
+        (uploaded?'（HTTP '+uploaded.status()+'）':''));
+    const deadline=Date.now()+18000;
+    while(Date.now()<deadline){
+      const failed=monitor.handled.find(response=>!response.ok());
+      if(failed)throw new Error('豆包处理 MP4 视频失败（HTTP '+failed.status()+'）');
+      const handled=monitor.handled.some(response=>response.ok());
+      const visibleAttachment=await page.locator('video').count()>previousVideos||
+        await page.locator('img').count()>previousImages||
+        await page.getByText(uploadedFilename,{exact:false}).count()>previousName;
+      if(handled||visibleAttachment){
+        onProgress('豆包已接收 MP4 视频（内含原始 MP3 音轨）：'+ref.name,26);
+        return;
+      }
+      await page.waitForTimeout(180);
+    }
+    throw new Error('MP4 已上传到存储，但豆包未确认附件；停止生成以免丢失音轨');
+  }finally{
+    monitor.close();
+    await converted.cleanup();
+  }
 }
 
 // The Doubao rich-text composer can split text into paragraphs, add invisible
@@ -422,10 +547,13 @@ export async function requestCurrentVideoDownloadLink(page,videoId){
 // mentioned images are uploaded, so Doubao's actual attached-image slot may
 // differ from its canvas index. Label the prompt using the upload slot.
 export function doubaoAttachmentPrompt(prompt,references){
-  return String(prompt||'').replace(/@图片(\d+)/g,token=>{
-    const index=references.findIndex(ref=>ref.token===token);
-    if(index<0)throw new Error('豆包参考图片 '+token+' 未包含在本次上传列表');
-    return '@图'+(index+1);
+  return String(prompt||'').replace(/@(图片|音频)(\d+)/g,(token,kind)=>{
+    const ref=references.find(item=>item.token===token);
+    if(!ref)throw new Error('豆包参考素材 '+token+' 未包含在本次上传列表');
+    // Keep the operator's surrounding prompt unchanged. The uploaded MP3
+    // is already converted to MP4; only expose its new filename in text.
+    if(kind==='音频')return String(ref.name||token).replace(/\.mp3$/i,'.mp4');
+    return '@图'+(references.filter(item=>item.kind!=='audio').indexOf(ref)+1);
   });
 }
 
@@ -435,17 +563,19 @@ export function doubaoAttachmentPrompt(prompt,references){
 export async function prepareVideoReferencesAndPrompt({
   page,job,localReferenceFile,onProgress=()=>{}
 }){
-  validateImageReferences(job.references);
+  validateMediaReferences(job.references);
   const textForDoubao=doubaoAttachmentPrompt(job.prompt,job.references);
   for(const [index,ref] of job.references.entries()){
-    onProgress('上传参考图片 '+(index+1)+'/'+job.references.length+'：'+ref.name,17);
+    onProgress('上传参考'+(ref.kind==='audio'?'音频':'图片')+' '+(index+1)+'/'+job.references.length+'：'+ref.name,17);
     try{
-      await uploadReference(page,ref,localReferenceFile,onProgress);
+      if(ref.kind==='audio')await uploadAudioReference(page,ref,localReferenceFile,onProgress);
+      else await uploadReference(page,ref,localReferenceFile,onProgress);
     }catch(error){
       throw new Error('第 '+(index+1)+'/'+job.references.length+
-        ' 张参考图上传未完成：'+String(error.message||error));
+        (ref.kind==='audio'?' 个参考音频上传未完成：':' 张参考图上传未完成：')+
+        String(error.message||error));
     }
-    onProgress('参考图片已确认 '+(index+1)+'/'+job.references.length,
+    onProgress('参考素材已确认 '+(index+1)+'/'+job.references.length,
       17+Math.round((index+1)/job.references.length*12));
   }
   onProgress('参考图片就绪，正在填写视频提示词',30);

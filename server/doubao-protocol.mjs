@@ -111,3 +111,14 @@ export function validateImageReferences(references) {
   }
   return true;
 }
+
+export function validateMediaReferences(references){
+  if(!Array.isArray(references))throw new Error('参考素材格式错误');
+  if(references.length>12)throw new Error('最多支持 12 个参考素材');
+  for(const ref of references){
+    if(!['image','audio'].includes(ref?.kind))throw new Error('视频只支持图片和音频节点作为参考素材');
+    if(typeof ref.url!=='string'||!ref.url.startsWith('/api/uploads/'))
+      throw new Error('请先把引用的'+(ref.kind==='audio'?'音频':'图片')+'上传到画布素材库');
+  }
+  return true;
+}

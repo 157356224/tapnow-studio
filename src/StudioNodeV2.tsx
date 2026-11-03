@@ -7,7 +7,7 @@ import {
   Image as ImageIcon, Video, AlignLeft, AudioLines, Upload, Plus, Tag, Copy,
   FolderPlus, Maximize2, ChevronDown, ArrowUp, Sparkles, Check,
   Play, MoreHorizontal, Trash2, X, Settings2, RotateCw, WandSparkles,
-  CircleHelp, MousePointer2, LogIn, Gem, Volume2, Download
+  CircleHelp, MousePointer2, LogIn, Gem, Volume2, Download, Pencil
 } from 'lucide-react';
 import { StudioActionsContext } from './nodes';
 import type { Kind, StudioNode } from './types';
@@ -128,11 +128,12 @@ function trackMagnets(e:PointerEvent){
 export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
   const api = useContext(StudioActionsContext);
   if (!api) throw new Error('Actions not ready');
+  const kind = data.kind;
   const highlight = useContext(ConnectionHighlightContext);
   const invalidTargets=useContext(ConnectionInvalidContext);
   const flowTargets=useContext(FlowTargetContext);
   const editorState=useContext(NodeEditorContext);
-  const showingCompose=selected&&editorState.id===id;
+  const showingCompose=kind!=='audio'&&selected&&editorState.id===id;
   const [mountedComposer,setMountedComposer]=useState(showingCompose);
   const [closingComposer,setClosingComposer]=useState(false);
   const toolbarVisible=showingCompose||(mountedComposer&&closingComposer);
@@ -156,6 +157,9 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
     return ()=>window.clearTimeout(timeout);
   },[showingCompose,editorState.instant,mountedComposer]);
   const [editing, setEditing] = useState(false);
+  const [renaming,setRenaming]=useState(false);
+  const [nameDraft,setNameDraft]=useState(data.title||TITLE[kind]);
+  const nameRef=useRef<HTMLInputElement>(null);
   const [textDraft,setTextDraft]=useState(data.text||'');
   const textComposing=useRef(false);
   const [menu, setMenu] = useState(false);
@@ -170,8 +174,15 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
   const inputRef = useRef<HTMLInputElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
   const nodeRef = useRef<HTMLDivElement>(null);
-  const kind = data.kind;
+  useEffect(()=>{
+    if(!renaming)setNameDraft(data.title||TITLE[kind]);
+  },[data.title,kind,renaming]);
+  const saveName=()=>{
+    api.update(id,{title:nameDraft.trim()||TITLE[kind]});
+    setRenaming(false);
+  };
   const videoFrame=videoFrames[data.ratio||'16:9']||videoFrames['16:9'];
   // Empty image nodes use the requested generation ratio. Once an uploaded or
   // generated image exists, its own measured pixel dimensions determine BOTH
@@ -304,6 +315,14 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
   const pauseVideoOnLeave=()=>{
     videoRef.current?.pause();
   };
+  const playAudioOnHover=()=>{
+    const audio=audioRef.current;
+    if(audio?.src)void audio.play().catch(()=>{});
+  };
+  const pauseAudioOnLeave=()=>{
+    const audio=audioRef.current;
+    if(audio){audio.pause();audio.currentTime=0;}
+  };
   return <div
     ref={nodeRef}
     style={nodeSize}
@@ -314,7 +333,19 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
       +(highlight?.id===id&&highlight.valid?' tn-drop-target tn-scan-'+highlight.direction:'')}
     onPointerDown={stopEvents} onMouseDown={stopEvents}
   >
-    <div className="tn-node-caption"><Icon size={13} strokeWidth={1.8}/><span>{data.title || TITLE[kind]}</span></div>
+    <div className="tn-node-caption"><Icon size={13} strokeWidth={1.8}/>
+      {renaming?<input ref={nameRef} autoFocus className="tn-node-name-input nodrag nowheel"
+        aria-label="修改节点名称" value={nameDraft} maxLength={120}
+        onChange={e=>setNameDraft(e.target.value)} onBlur={saveName}
+        onKeyDown={e=>{
+          if(e.key==='Enter'){e.preventDefault();e.currentTarget.blur();}
+          if(e.key==='Escape'){e.preventDefault();setNameDraft(data.title||TITLE[kind]);setRenaming(false);}
+        }}/>:<button className="tn-node-name nodrag" title="点击修改节点名称"
+          aria-label="重命名节点" onClick={e=>{e.stopPropagation();setRenaming(true);}}
+          onDoubleClick={e=>{e.stopPropagation();setRenaming(true);}}>
+          <span>{data.title||TITLE[kind]}</span><Pencil size={11}/>
+        </button>}
+    </div>
     <div className="tn-node-frame">
       {kind === 'text' ? <textarea
         ref={textRef}
@@ -340,10 +371,13 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
           if(!textComposing.current)api.update(id,{text:e.currentTarget.value});
         }}
       /> : kind === 'audio' ?
-        <div className="tn-audio-visual">
+        <div className="tn-audio-visual" onMouseEnter={playAudioOnHover}
+          onMouseLeave={pauseAudioOnLeave} title={data.mediaUrl?'悬停播放音频，移开暂停':'点击上传添加音频'}>
           <AudioLines size={46} strokeWidth={1.45}/>
           <div className="tn-wave">{Array.from({length:27},(_,i)=><i key={i} style={{height:(12+Math.abs(Math.sin(i*1.7))*40)+'%'}}/>)}</div>
-          {data.mediaUrl && <audio controls src={data.mediaUrl} className="nodrag nowheel"/>}
+          {data.mediaUrl && <audio ref={audioRef} controls src={data.mediaUrl}
+            preload="metadata" className="nodrag nowheel"
+            onCanPlay={()=>{if(nodeRef.current?.querySelector('.tn-audio-visual:hover'))playAudioOnHover();}}/>}
         </div>
         : data.mediaUrl ? (
           isVideo ? <video ref={videoRef}
@@ -390,7 +424,7 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
         {data.jobMessage||'生成失败，请检查账号登录状态'}</div>}
       {data.bypass && <span className="tn-disabled-marker">已跳过</span>}
     </div>
-    {(kind==='image'||kind==='video') &&
+    {(kind==='image'||kind==='video'||kind==='audio') &&
       <button className="tn-upload-chip nodrag" title="上传素材" onClick={()=>inputRef.current?.click()}><Upload size={14}/> 上传</button>}
     <input hidden ref={inputRef} type="file" accept={fileAccept} onChange={e=>{
       const file=e.currentTarget.files?.[0]; if(file)void api.uploadFor(id,file);e.currentTarget.value='';
@@ -403,7 +437,7 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
       onClick={e=>{e.stopPropagation();api.openNodeMenu(id,'source',e.clientX,e.clientY);}}>
       <span className="tn-port-visual"><span className="tn-port-disc"><Plus size={20} strokeWidth={1.7}/></span></span>
     </Handle>
-    <NodeToolbar isVisible={toolbarVisible} position={Position.Top} offset={12} align="center">
+    <NodeToolbar isVisible={kind==='audio'?selected:toolbarVisible} position={Position.Top} offset={12} align="center">
       <div className={'tn-toolbar nodrag'+(closingComposer?' tn-editor-closing':'')} onPointerDown={e=>e.stopPropagation()}>
         <button title="颜色" className="tn-color"><span/></button>
         <i className="tn-toolbar-sep"/>
@@ -413,7 +447,7 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
         <button title="放大" onClick={()=>api.expand(id)}><Maximize2 size={16}/></button>
         <button title="节点设置" onClick={()=>api.inspect(id)}><Settings2 size={16}/></button>
         <button title="删除节点" onClick={()=>api.remove(id)}><Trash2 size={16}/></button>
-        {(kind==='image'||kind==='video')&&data.mediaUrl&&
+        {(kind==='image'||kind==='video'||kind==='audio')&&data.mediaUrl&&
           <a className="tn-toolbar-download nodrag" href={data.mediaUrl}
             title="下载生成素材" aria-label="下载生成素材"
             download={downloadFilename} onClick={event=>event.stopPropagation()}>
@@ -421,7 +455,7 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
           </a>}
       </div>
     </NodeToolbar>
-    <NodeToolbar isVisible={toolbarVisible} position={Position.Bottom} offset={15} align="center">
+    {kind!=='audio'&&<NodeToolbar isVisible={toolbarVisible} position={Position.Bottom} offset={15} align="center">
       <div className={'floating-compose nodrag nowheel'+(closingComposer?' tn-editor-closing':'')}
         onMouseDown={e=>e.stopPropagation()} onPointerDown={e=>e.stopPropagation()}>
         <div className="tn-compose-top">
@@ -581,6 +615,6 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
               '选择账号后发送到 '+selectedModel)}
         </div>}
       </div>
-    </NodeToolbar>
+    </NodeToolbar>}
   </div>;
 }

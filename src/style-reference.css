@@ -67,6 +67,11 @@
 .tn-node .tn-node-caption{height:27px;display:flex;align-items:center;gap:6px;color:#96969b;font-size:13px;font-weight:500;padding-left:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:relative;z-index:3}
 .tn-node .tn-node-caption svg{flex-shrink:0}
 .tn-node .tn-node-caption>span{overflow:hidden;text-overflow:ellipsis}
+.tn-node-name{display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:calc(100% - 28px);border:0;background:none;padding:2px 3px;color:inherit;font:inherit;cursor:text}
+.tn-node-name>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tn-node-name>svg{opacity:0;flex-shrink:0}
+.tn-node-name:hover>svg,.tn-node-name:focus-visible>svg{opacity:.85}
+.tn-node-name-input{width:min(260px,85%);height:24px;color:#f5f5f8;background:#313136;border:1px solid #7b7b84;border-radius:5px;padding:2px 6px;font:inherit;outline:none;cursor:text}
 .tn-node-frame{height:425px;width:100%;background:#202020;border:1px solid #333335;border-radius:19px;overflow:hidden;position:relative;z-index:2;transition:border-color .18s ease,box-shadow .18s ease,transform .16s ease}
 .tn-video .tn-node-frame{height:282px;border-radius:18px}
 .tn-text .tn-node-frame{height:286px;border-radius:18px}
@@ -93,6 +98,9 @@
 .tn-wave{height:38px;width:78%;display:flex;justify-content:space-evenly;align-items:center;gap:3px}
 .tn-wave i{background:#5f6067;width:4px;border-radius:5px}
 .tn-audio-visual audio{height:30px;width:100%}
+.tn-audio-visual{cursor:pointer}
+.tn-audio-visual:hover .tn-wave i{background:#23aafd}
+.tn-audio-visual audio{cursor:auto}
 
 /* The interactive handles sit ON the card border; floating circles are only visuals.
    Connection curves therefore start exactly at the node's physical edge. */

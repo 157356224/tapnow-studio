@@ -60,6 +60,8 @@ app.get('/api/health', (_req, res) => res.json({
   browserBridges:['doubao-seedance-v2','muse-edge-chat'],
   museBridgeRevision:'quota-auto-v6-image-resolution',
   museMediaRevision:'fresh-chat-media-v2',
+  audioReferenceRevision:'mixed-media-v1',
+  audioMp4Revision:'mp3-to-mp4-v1',
   referenceSelectionRevision:'at-order-v2',
   multiImageUploadRevision:'v3-prompt-first',
   videoModelRevision:'mini-fast-v1',

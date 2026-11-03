@@ -41,3 +41,18 @@ assert.throws(()=>refs('@图片2',[]),/还没有图片素材/);
 assert.deepEqual(refs('@图片3',['b']).map(x=>x.id),['b'],
   'Missing images keep their index and do not shift later @ references');
 console.log('PASS: only @ referenced connected images, Muse/Doubao shared policy, no duplicates, ordered refs, invalid refs fail closed');
+
+// Image and audio numbering are independent for mixed video inputs.
+project.nodes.push({id:'audio-a',data:{kind:'audio',title:'人物配音',mediaUrl:'/api/uploads/a.mp3'}},
+  {id:'audio-b',data:{kind:'audio',title:'背景音乐',mediaUrl:'/api/uploads/b.wav'}});
+project.edges.push({source:'audio-a',target:'video'},{source:'audio-b',target:'video'});
+assert.deepEqual(refs('配合 @音频2 使用 @图片3，再用 @音频1',['b','audio-a','audio-b'])
+  .map(x=>[x.id,x.kind,x.token]),[
+    ['b','image','@图片3'],['audio-a','audio','@音频1'],['audio-b','audio','@音频2']
+  ]);
+assert.deepEqual(refs('@音频1',['audio-a']).map(x=>x.name),['人物配音']);
+assert.throws(()=>refs('@音频3',[]),/没有对应的已连接音频/);
+assert.throws(()=>refs('@音频1',[]),/必须与输入框/);
+assert.throws(()=>refs('@音频1',['audio-b']),/必须与输入框/);
+assert.throws(()=>refs('@音频1',['audio-a'],'image-target'),/没有对应的已连接音频/);
+console.log('PASS: mixed audio/image references, independent numbering, renamed nodes, strict validation');

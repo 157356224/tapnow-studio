@@ -32,12 +32,14 @@
 .tn-node .tn-port-disc:hover{filter:none!important}
 .floating-compose textarea.tn-compose-prompt{
   box-sizing:border-box;
-  height:72px;
   min-height:72px;
-  max-height:130px;
+  max-height:min(48vh,420px);
   overflow-y:auto!important;
   resize:none;
   overscroll-behavior:contain;
+}
+.floating-compose textarea.tn-compose-prompt.tn-prompt-has-content{
+  min-height:min(160px,48vh);
 }
 .tn-node .tn-node-text{
   overflow-y:auto!important;
@@ -333,11 +335,14 @@
 .tn-compose-editor{min-height:71px;white-space:pre-wrap;overflow-wrap:anywhere;
   color:#ececf0;font-size:13px;line-height:1.95;cursor:text;
   user-select:text;-webkit-user-select:text;padding:4px 1px!important;
-  max-height:130px;overflow-y:auto!important;overscroll-behavior:contain}
+  height:auto;max-height:min(48vh,420px);overflow-y:auto!important;overscroll-behavior:contain}
+.tn-compose-editor.tn-prompt-has-content{min-height:min(160px,48vh)}
 .tn-compose-editor:empty:before{content:attr(data-placeholder);color:#76767c;pointer-events:none}
 .tn-inline-ref{display:inline-flex;align-items:center;vertical-align:middle;max-height:22px;gap:4px;
   background:#3b3b3f;border:1px solid #55555d;border-radius:6px;padding:2px 5px 2px 2px;
   color:#d6d6e3;font-size:11px;line-height:16px;user-select:all;white-space:nowrap;cursor:pointer}
+.tn-inline-ref-title{display:inline-block;max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle}
+.tn-ref-audio-mark{font-size:15px;line-height:15px;color:#2daaff}
 .tn-inline-ref-icon{position:relative;display:inline-flex;width:15px;height:15px;flex:0 0 15px;align-items:center;justify-content:center}
 .tn-inline-ref-icon img{display:block;width:15px;height:15px;object-fit:cover;border-radius:3px}
 .tn-inline-ref-x{display:none;position:absolute;inset:0;align-items:center;justify-content:center;

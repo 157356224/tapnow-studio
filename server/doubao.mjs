@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import {projectImageReferences} from './reference-selection.mjs';
 import { chromium } from 'playwright';
 import { runSeedanceBrowser } from './doubao-runner.mjs';
-import { validateImageReferences } from './doubao-protocol.mjs';
+import { validateMediaReferences } from './doubao-protocol.mjs';
 import { setProjectJob } from './doubao-project.mjs';
 import {closeCompletedBrowser} from './browser-cleanup.mjs';
 import {
@@ -393,9 +393,9 @@ export function mountDoubaoRoutes(app,readProjects,writeProjects){
       const prompt=String(req.body.prompt||node.data.prompt||'').trim();
       if(!prompt||prompt.length>12000)throw new Error('请填写视频提示词');
       const references=projectImageReferences(project,nodeId,prompt,req.body.references||[]);
-      validateImageReferences(references);
+      validateMediaReferences(references);
       for(const ref of references)if(!localReferenceFile(ref.url))
-        throw new Error('请先将参考图片上传到画布素材库：'+ref.name);
+        throw new Error('请先将参考素材上传到画布素材库：'+ref.name);
       const ratio=String(req.body.ratio||node.data.ratio||'16:9');
       const duration=String(req.body.duration||node.data.duration||'10s');
       if(!/^\d{1,2}:\d{1,2}$/.test(ratio))throw new Error('视频比例格式错误');

@@ -1,7 +1,7 @@
 import {useEffect,useMemo,useRef,useState} from 'react';
 import type {CompositionEvent,KeyboardEvent} from 'react';
 import {createPortal} from 'react-dom';
-import {Image as ImageIcon,Plus,Search,ChevronLeft,ChevronRight} from 'lucide-react';
+import {Image as ImageIcon,AudioLines,Plus,Search,ChevronLeft,ChevronRight} from 'lucide-react';
 import {reorderReferenceNodes} from './doubao';
 import type {ReferenceNode} from './doubao';
 
@@ -23,33 +23,37 @@ function editorText(node:Node):string{
     (node.nodeName==='DIV'?'\n':'');
 }
 
-function makeImageChip(ref:ReferenceNode){
+function makeMediaChip(ref:ReferenceNode){
   const chip=document.createElement('span');
   chip.className='tn-inline-ref';
   chip.contentEditable='false';
   chip.dataset.token=ref.token;
   chip.dataset.refId=ref.id;
-  chip.title='点击移除 '+ref.token;
+  chip.title=ref.title+'（'+ref.token+'，点击移除）';
   const icon=document.createElement('span');
   icon.className='tn-inline-ref-icon';
-  const img=document.createElement('img');
-  if(ref.url)img.src=ref.url;
-  img.alt='';img.draggable=false;
+  const img=ref.kind==='image'?document.createElement('img'):null;
+  if(img){if(ref.url)img.src=ref.url;img.alt='';img.draggable=false;}
   const remove=document.createElement('span');
   remove.className='tn-inline-ref-x';
   remove.textContent='×';
   remove.setAttribute('aria-hidden','true');
-  icon.append(img,remove);
-  chip.append(icon,document.createTextNode('Image'));
+  if(img)icon.append(img);
+  else{const mark=document.createElement('span');mark.className='tn-ref-audio-mark';mark.textContent='♪';icon.append(mark);}
+  icon.append(remove);
+  const title=document.createElement('span');
+  title.className='tn-inline-ref-title';
+  title.textContent=ref.title||ref.token;
+  chip.append(icon,title);
   return chip;
 }
 
 function renderReferences(editor:HTMLDivElement,prompt:string,refs:ReferenceNode[]){
   const tokenMap=new Map(refs.map(r=>[r.token,r]));
-  const parts=prompt.split(/(@图片\d+)/g);
+  const parts=prompt.split(/(@(?:图片|音频)\d+)/g);
   editor.replaceChildren(...parts.map(part=>{
     const ref=tokenMap.get(part);
-    return ref?makeImageChip(ref):document.createTextNode(part);
+    return ref?makeMediaChip(ref):document.createTextNode(part);
   }));
 }
 
@@ -88,10 +92,11 @@ export function VideoPromptEditor({
   const [search,setSearch]=useState('');
   const [hovered,setHovered]=useState<HoveredReference|null>(null);
   const [focused,setFocused]=useState(false);
+  const [hasContent,setHasContent]=useState(Boolean(prompt.trim()));
   // The attachment tray previews every connected image immediately. Only
   // images mentioned in prompt are uploaded by the backend.
   const selected=useMemo(()=>references.filter(r=>r.connected),[references,explicitIds]);
-  const used=useMemo(()=>new Set(prompt.match(/@图片\d+/g)||[]),[prompt]);
+  const used=useMemo(()=>new Set(prompt.match(/@(图片|音频)\d+/g)||[]),[prompt]);
   const filtered=useMemo(()=>references.filter(r=>
     (r.title+' '+r.token+' '+(references.indexOf(r)+1)).toLowerCase()
       .includes(search.trim().toLowerCase())),[references,search]);
@@ -119,14 +124,15 @@ export function VideoPromptEditor({
 
   useEffect(()=>{
     const el=editor.current;
-    const mapping=references.map(ref=>ref.id+':'+ref.token+':'+ref.url).join('|');
+    const mapping=references.map(ref=>ref.id+':'+ref.token+':'+ref.url+':'+ref.title).join('|');
     const orderChanged=mapping!==renderedReferenceMap.current;
     if(!el||composing.current||(document.activeElement===el&&!orderChanged))return;
     const now=editorText(el).replace(/\n$/,'');
     if(orderChanged||now!==prompt||el.querySelectorAll('.tn-inline-ref').length!==
-      (prompt.match(/@图片\d+/g)||[]).filter(token=>references.some(r=>r.token===token)).length){
+      (prompt.match(/@(图片|音频)\d+/g)||[]).filter(token=>references.some(r=>r.token===token)).length){
       renderReferences(el,prompt,references);
     }
+    setHasContent(Boolean(editorText(el).trim()));
     latestPrompt.current=prompt;
     renderedReferenceMap.current=mapping;
   },[prompt,references]);
@@ -135,6 +141,7 @@ export function VideoPromptEditor({
     if(!editor.current)return;
     const text=editorText(editor.current).replace(/\n$/,'');
     latestPrompt.current=text;
+    setHasContent(Boolean(text.trim()));
     onPrompt(text);
     // The gallery is a deliberate action: clicking + or typing an @ key.
     // Ordinary editing (including IME commits) must never open it.
@@ -163,7 +170,7 @@ export function VideoPromptEditor({
       if(match)range.setStart(range.startContainer,range.startOffset-match[0].length);
     }
     range.deleteContents();
-    const chip=makeImageChip(ref);
+    const chip=makeMediaChip(ref);
     range.insertNode(chip);
     range.setStartAfter(chip);
     range.collapse(true);
@@ -188,9 +195,11 @@ export function VideoPromptEditor({
     const next=reorderReferenceNodes(currentPrompt,references,id,direction);
     if(next.order.every((source,index)=>references[index]?.id===source))return;
     const byId=new Map(references.map(ref=>[ref.id,ref]));
-    const nextRefs=next.order.map((source,index)=>({
-      ...byId.get(source)!,token:'@图片'+(index+1)
-    }));
+    const counters={image:0,audio:0};
+    const nextRefs=next.order.map(source=>{
+      const ref=byId.get(source)!;
+      return {...ref,token:'@'+(ref.kind==='audio'?'音频':'图片')+(++counters[ref.kind])};
+    });
     // Update the contenteditable chips immediately. The editor can retain
     // focus while moving a thumbnail, in which case its normal effect skips
     // external prop synchronization to protect a currently typed sentence.
@@ -198,7 +207,7 @@ export function VideoPromptEditor({
       renderReferences(editor.current,next.prompt,nextRefs);
       latestPrompt.current=next.prompt;
       renderedReferenceMap.current=nextRefs
-        .map(ref=>ref.id+':'+ref.token+':'+ref.url).join('|');
+        .map(ref=>ref.id+':'+ref.token+':'+ref.url+':'+ref.title).join('|');
     }
     onReorder(id,direction,currentPrompt);
   };
@@ -211,38 +220,38 @@ export function VideoPromptEditor({
         onMouseEnter={e=>hoverReference(ref.id,'attachment',e.currentTarget)}
         onMouseLeave={()=>setHovered(previous=>previous?.id===ref.id&&previous.source==='attachment'?null:previous)}>
         <button type="button" className="tn-ref-thumbnail" disabled={!ref.url}
-          title={ref.url?'在提示词插入 '+ref.token:'该图片节点尚未上传图片'}
+          title={ref.url?'在提示词插入 '+ref.title:'该节点尚未上传素材'}
           aria-label={'引用'+ref.token} onMouseDown={e=>e.preventDefault()}
           onClick={()=>insert(ref)}>
-          {ref.url?<img src={ref.url} alt={ref.title} draggable={false}/>:
-            <ImageIcon size={17}/>}
+          {ref.kind==='audio'?<AudioLines size={17}/>:ref.url?
+            <img src={ref.url} alt={ref.title} draggable={false}/>:<ImageIcon size={17}/>}
         </button>
         <span className="tn-ref-attachment-label">{index+1}</span>
         <span className="tn-ref-move-controls">
-          <button type="button" disabled={index===0}
+          <button type="button" disabled={!selected.slice(0,index).some(other=>other.kind===ref.kind)}
             aria-label={'将'+ref.token+'前移'} title={'将'+ref.token+'前移'}
             onMouseDown={e=>e.preventDefault()}
             onClick={()=>moveReference(ref.id,-1)}>
             <ChevronLeft size={12}/></button>
-          <button type="button" disabled={index===selected.length-1}
+          <button type="button" disabled={!selected.slice(index+1).some(other=>other.kind===ref.kind)}
             aria-label={'将'+ref.token+'后移'} title={'将'+ref.token+'后移'}
             onMouseDown={e=>e.preventDefault()}
             onClick={()=>moveReference(ref.id,1)}>
             <ChevronRight size={12}/></button>
         </span>
       </div>)}
-      <button className="tn-ref-attach-add" title="添加已连接的参考图片"
+      <button className="tn-ref-attach-add" title="添加已连接的参考素材"
         disabled={!references.length}
-        aria-label={references.length?'添加已连接图片引用':'请先将图片节点连接到视频节点'}
+        aria-label={references.length?'添加已连接素材引用':'请先连接图片或音频节点'}
         onClick={()=>{setSearch('');setPicker(p=>references.length>0&&!p);}}>
         <Plus size={19} strokeWidth={1.6}/>
       </button>
       {!!selected.length&&<span className="tn-ref-attachment-count">
-        已连接{selected.length}张 · 已引用{selected.filter(ref=>used.has(ref.token)).length}张
+        已连接{selected.length}{selected.some(ref=>ref.kind==='audio')?'项':'张'} · 已引用{selected.filter(ref=>used.has(ref.token)).length}{selected.some(ref=>ref.kind==='audio')?'项':'张'}
       </span>}
       {picker&&<div className="tn-ref-gallery" ref={galleryRef}>
         <label className="tn-ref-gallery-search"><Search size={14} strokeWidth={1.7}/>
-          <input aria-label="搜索已连接图片" placeholder="搜索" value={search}
+          <input aria-label="搜索已连接素材" placeholder="搜索" value={search}
             onMouseDown={e=>e.stopPropagation()}
             onChange={e=>setSearch(e.currentTarget.value)}
             onKeyDown={e=>{
@@ -261,12 +270,14 @@ export function VideoPromptEditor({
         {filtered.length?filtered.map(ref=><button key={ref.id}
           onMouseDown={e=>e.preventDefault()} onClick={()=>insert(ref)}
           className="tn-ref-gallery-item">
-          <img src={ref.url} alt="" draggable={false}/><span>{ref.title||'Image'}</span>
-          <small>{ref.token}</small><ImageIcon size={13} className="tn-ref-gallery-kind"/>
-        </button>):<p>{references.length?'没有匹配的图片':'请先将图片节点连接到视频节点。'}</p>}
+          {ref.kind==='audio'?<AudioLines size={18}/>:ref.url?<img src={ref.url} alt="" draggable={false}/>:<ImageIcon size={18}/>}
+          <span>{ref.title||ref.token}</span>
+          <small>{ref.token}</small>{ref.kind==='audio'?<AudioLines size={13} className="tn-ref-gallery-kind"/>:<ImageIcon size={13} className="tn-ref-gallery-kind"/>}
+        </button>):<p>{references.length?'没有匹配的素材':'请先连接图片或音频节点。'}</p>}
       </div>}
     </div>
-    <div className={'tn-compose-prompt tn-compose-editor nodrag nowheel'+(focused?' tn-editing':'')}
+    <div className={'tn-compose-prompt tn-compose-editor nodrag nowheel'+
+      (hasContent?' tn-prompt-has-content':'')+(focused?' tn-editing':'')}
       aria-label="节点生成提示词" role="textbox" aria-multiline="true"
       data-placeholder="描述任何你想要生成的内容"
       contentEditable suppressContentEditableWarning
@@ -307,8 +318,8 @@ export function VideoPromptEditor({
       <div className={'tn-ref-floating-preview '+(hovered.source==='inline'?'tn-ref-editor-preview':'tn-ref-hover-preview')}
         aria-hidden="true" style={{position:'fixed',left:hovered.left,bottom:hovered.bottom,
           width:82,zIndex:99999,pointerEvents:'none'}}>
-        <img src={references.find(ref=>ref.id===hovered.id)!.url} alt=""/>
-        {hovered.source==='attachment'&&<span className="tn-ref-preview-caption">@Image</span>}
+        {references.find(ref=>ref.id===hovered.id)!.kind==='audio'?<AudioLines size={36}/>:<img src={references.find(ref=>ref.id===hovered.id)!.url} alt=""/>}
+        {hovered.source==='attachment'&&<span className="tn-ref-preview-caption">{references.find(ref=>ref.id===hovered.id)!.title}</span>}
       </div>,document.body)}
   </div>;
 }

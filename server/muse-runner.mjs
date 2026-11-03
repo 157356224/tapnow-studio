@@ -17,10 +17,11 @@ export function buildMusePrompt(job){
   const prompt=String(job.prompt||'').trim();
   if(!prompt||prompt.length>12000)throw new Error('请输入 Muse 生成内容');
   const attached=Array.isArray(job.references)?job.references:[];
-  const cleanPrompt=prompt.replace(/@图片(\d+)/g,(token)=>{
-    const position=attached.findIndex(ref=>ref.token===token);
-    if(position<0)throw new Error('参考图 '+token+' 尚未上传，请检查视频节点的 @ 引用');
-    return '@图'+(position+1);
+  const cleanPrompt=prompt.replace(/@(图片|音频)(\d+)/g,(token,kind)=>{
+    const ref=attached.find(item=>item.token===token);
+    if(!ref)throw new Error('参考素材 '+token+' 尚未上传，请检查节点的 @ 引用');
+    if(kind==='音频')return '已上传的参考音频「'+ref.name+'」';
+    return '@图'+(attached.filter(item=>item.kind!=='audio').indexOf(ref)+1);
   });
   const ratio=String(job.ratio||'16:9');
   if(!/^\d{1,2}:\d{1,2}$/.test(ratio))throw new Error('画面比例格式错误');
@@ -130,16 +131,19 @@ export async function findMuseEditor(page){
 
 export async function uploadMuseReferences(page,references,localReferenceFile,onProgress){
   if(!references?.length)return;
-  if(typeof localReferenceFile!=='function')throw new Error('Muse 未配置本地图片文件路径');
-  const files=references.map(ref=>{
+  if(typeof localReferenceFile!=='function')throw new Error('Muse 未配置本地参考素材文件路径');
+  const attachments=references.map(ref=>{
     const filename=localReferenceFile(ref.url);
     if(!filename||!fs.existsSync(filename))
-      throw new Error('Muse 参考图不存在于本地素材库：'+ref.name);
-    if(!/\.(png|jpg|jpeg|webp)$/i.test(filename))
+      throw new Error('Muse 参考素材不存在于本地素材库：'+ref.name);
+    if(ref.kind==='audio'){
+      if(!/\.(mp3|wav|m4a|ogg|aac|flac|webm)$/i.test(filename))
+        throw new Error('Muse 参考音频格式不支持：'+ref.name);
+    }else if(!/\.(png|jpg|jpeg|webp)$/i.test(filename))
       throw new Error('Muse 只支持 PNG、JPG、WebP 参考图：'+ref.name);
     if(fs.statSync(filename).size>30*1024*1024)
-      throw new Error('单张 Muse 参考图超过 30MB：'+ref.name);
-    return filename;
+      throw new Error('Muse 参考素材超过 30MB：'+ref.name);
+    return {filename,kind:ref.kind};
   });
   const editor=await findMuseEditor(page);
   if(!editor)throw new Error('Muse 消息输入框不存在，无法添加参考图片');
@@ -149,10 +153,19 @@ export async function uploadMuseReferences(page,references,localReferenceFile,on
     .locator('input[type="file"][multiple]');
   let input=await near.count()===1?near:page.locator('input[type="file"][multiple]');
   if(await input.count()!==1)
-    throw new Error('未找到 Muse 消息框内唯一的多图上传控件；本次未提交，防止漏图');
+    throw new Error('未找到 Muse 消息框内唯一的素材上传控件；本次未提交');
   input=input.first();
+  const accept=(await input.getAttribute('accept')||'').toLowerCase();
+  const audioCount=attachments.filter(item=>item.kind==='audio').length;
+  const imageCount=attachments.length-audioCount;
+  if(audioCount&&accept&&!/audio\/|\.mp3|\.wav|\.m4a|\.ogg|\.aac|\.flac/.test(accept))
+    throw new Error('Muse 当前消息上传控件没有声明支持音频：'+accept);
   const before=await page.locator('img').count();
-  onProgress('Muse 正在上传 '+files.length+' 张被 @ 引用的图片',15);
+  const beforeAudio=await page.locator('audio').count();
+  const files=attachments.map(item=>item.filename);
+  const filenames=files.map(file=>path.basename(file));
+  const oldNames=await page.evaluate(names=>names.map(name=>(document.body.innerText||'').includes(name)),filenames);
+  onProgress('Muse 正在上传 '+files.length+' 个被 @ 引用的素材',15);
   await input.setInputFiles(files,{timeout:15000});
   // The site may clear the native input once it has transferred each file.
   // We need a visible preview before submitting any generation prompt.
@@ -160,26 +173,31 @@ export async function uploadMuseReferences(page,references,localReferenceFile,on
   let confirmed=false;
   while(Date.now()<deadline){
     if(page.isClosed())throw new Error('Muse 浏览器已关闭，参考图上传中断');
-    const state=await page.evaluate(({before,filenames})=>{
+    const state=await page.evaluate(({before,beforeAudio,filenames,oldNames})=>{
       const imgs=[...document.querySelectorAll('img')];
       const previews=imgs.length-before;
       const text=document.body.innerText||'';
-      const named=filenames.filter(name=>text.includes(name)).length;
+      const named=filenames.filter((name,index)=>!oldNames[index]&&text.includes(name)).length;
+      const audioPreviews=document.querySelectorAll('audio').length-beforeAudio;
       const filesInput=[...document.querySelectorAll('input[type=file]')]
         .find(input=>input.multiple);
       const staged=filesInput?.files?.length||0;
-      return {previews,named,staged};
-    },{before,filenames:files.map(file=>path.basename(file))});
-    if(state.previews>=files.length||state.named>=files.length){
+      return {previews,named,audioPreviews,staged};
+    },{before,beforeAudio,filenames,oldNames});
+    const imageConfirmed=state.previews>=imageCount||
+      (!audioCount&&state.named>=imageCount);
+    const audioConfirmed=!audioCount||state.audioPreviews>=audioCount||
+      state.named>=audioCount;
+    if((imageConfirmed&&audioConfirmed)||state.named>=files.length){
       confirmed=true;break;
     }
     await page.waitForTimeout(450);
   }
   if(!confirmed)
-    throw new Error('Muse 没有显示全部参考图片预览（'+files.length+
-      ' 张）；本次停止发送，防止漏图生成。请检查浏览器中的上传控件');
+    throw new Error('Muse 没有显示全部参考素材预览（'+files.length+
+      ' 个）；本次停止发送，防止漏素材生成。请检查浏览器中的上传控件');
   await page.waitForTimeout(650);
-  onProgress('Muse 已显示 '+files.length+' 张参考图，准备发送提示词',20);
+  onProgress('Muse 已显示 '+files.length+' 个参考素材，准备发送提示词',20);
 }
 
 export async function sendMusePrompt(page,job){
