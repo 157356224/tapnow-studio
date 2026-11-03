@@ -57,11 +57,6 @@ function renderReferences(editor:HTMLDivElement,prompt:string,refs:ReferenceNode
   }));
 }
 
-function selectionInside(editor:HTMLElement){
-  const selected=window.getSelection();
-  return selected&&selected.rangeCount&&editor.contains(selected.anchorNode);
-}
-
 type HoveredReference={
   id:string;
   source:'attachment'|'inline';
@@ -85,6 +80,8 @@ export function VideoPromptEditor({
   const editor=useRef<HTMLDivElement>(null);
   const richPrompt=useRef<HTMLDivElement>(null);
   const galleryRef=useRef<HTMLDivElement>(null);
+  const savedCaret=useRef<Range|null>(null);
+  const mentionMode=useRef(false);
   const composing=useRef(false);
   const latestPrompt=useRef(prompt);
   const renderedReferenceMap=useRef('');
@@ -93,6 +90,38 @@ export function VideoPromptEditor({
   const [hovered,setHovered]=useState<HoveredReference|null>(null);
   const [focused,setFocused]=useState(false);
   const [hasContent,setHasContent]=useState(Boolean(prompt.trim()));
+  // A mention is driven by the text *at the caret*, not only keydown.
+  // IME, paste and Playwright insertText can insert @ without keydown.
+  const currentCaret=()=>{
+    const el=editor.current,selection=window.getSelection();
+    if(!el||!selection?.rangeCount||!selection.isCollapsed||
+      !el.contains(selection.anchorNode))return null;
+    return selection.getRangeAt(0);
+  };
+  const captureCaret=()=>{
+    const range=currentCaret();
+    if(range)savedCaret.current=range.cloneRange();
+  };
+  const mentionAtCaret=()=>{
+    const el=editor.current,range=currentCaret();
+    if(!el||!range)return null;
+    const prefix=document.createRange();
+    prefix.selectNodeContents(el);
+    prefix.setEnd(range.startContainer,range.startOffset);
+    const match=editorText(prefix.cloneContents()).match(/@([^@\s]*)$/);
+    return match?match[1]:null;
+  };
+  const updateMentionPicker=()=>{
+    const query=mentionAtCaret();
+    if(query!==null){
+      mentionMode.current=true;
+      setSearch(query);
+      setPicker(true);
+    }else if(mentionMode.current){
+      mentionMode.current=false;
+      setPicker(false);
+    }
+  };
   // The attachment tray previews every connected image immediately. Only
   // images mentioned in prompt are uploaded by the backend.
   const selected=useMemo(()=>references.filter(r=>r.connected),[references,explicitIds]);
@@ -108,13 +137,13 @@ export function VideoPromptEditor({
   };
   useEffect(()=>{
     if(references.length)return;
-    setPicker(false);
     setHovered(null);
   },[references.length]);
   useEffect(()=>{
     if(!picker)return;
     const dismiss=(event:PointerEvent)=>{
       if(richPrompt.current?.contains(event.target as Node))return;
+      mentionMode.current=false;
       setPicker(false);
       setSearch('');
     };
@@ -142,10 +171,11 @@ export function VideoPromptEditor({
     const text=editorText(editor.current).replace(/\n$/,'');
     latestPrompt.current=text;
     setHasContent(Boolean(text.trim()));
+    captureCaret();
     onPrompt(text);
-    // The gallery is a deliberate action: clicking + or typing an @ key.
-    // Ordinary editing (including IME commits) must never open it.
-    if(!composing.current)setPicker(previous=>previous&&references.length>0&&/@[^@\s]*$/.test(text));
+    // Only an @ query at the current caret opens the mention gallery.
+    // Opening no longer depends on a preceding keydown event.
+    if(!composing.current)updateMentionPicker();
   };
   const handleCompositionEnd=(_e:CompositionEvent<HTMLDivElement>)=>{
     composing.current=false;
@@ -154,9 +184,11 @@ export function VideoPromptEditor({
   const insert=(ref:ReferenceNode)=>{
     const el=editor.current;
     if(!el)return;
-    el.focus();
     const sel=window.getSelection();
-    let range=sel?.rangeCount&&selectionInside(el)?sel.getRangeAt(0):null;
+    let range=currentCaret()?.cloneRange()||
+      (savedCaret.current&&el.contains(savedCaret.current.commonAncestorContainer)
+        ?savedCaret.current.cloneRange():null);
+    el.focus();
     if(!range){
       range=document.createRange();
       range.selectNodeContents(el);
@@ -174,19 +206,39 @@ export function VideoPromptEditor({
     range.insertNode(chip);
     range.setStartAfter(chip);
     range.collapse(true);
+    // An atomic chip followed by "25" must never serialize as "@图片125".
+    // Leave a real text-node separator and put the caret after it.
+    const next=chip.nextSibling;
+    if(next?.nodeType===Node.TEXT_NODE&&/^\s/.test(next.textContent||'')){
+      // Do not leave the caret *before* existing whitespace: typing a
+      // number there would join the new chip's token with that number.
+      range.setStart(next,1);
+      range.collapse(true);
+    }else if(!next||next.nodeName!=='BR'){
+      const space=document.createTextNode(' ');
+      range.insertNode(space);
+      range.setStart(space,space.length);
+      range.collapse(true);
+    }
     sel?.removeAllRanges();
     sel?.addRange(range);
+    savedCaret.current=range.cloneRange();
+    mentionMode.current=false;
     onReference(ref.id);
     commit();
     setPicker(false);
     setSearch('');
   };
   const onKeyDown=(e:KeyboardEvent<HTMLDivElement>)=>{
-    if(e.key==='Escape'){setPicker(false);setSearch('');return;}
+    if(e.key==='Escape'){mentionMode.current=false;setPicker(false);setSearch('');return;}
     if(e.nativeEvent.isComposing||composing.current||e.key==='Process'||e.keyCode===229)return;
-    if(e.key==='@'&&references.length){setSearch('');setPicker(true);}
-    if(e.key==='Enter'&&picker&&references.length){
-      e.preventDefault();insert(references[0]);
+    if(e.key==='@'){
+      mentionMode.current=true;
+      setSearch('');
+      setPicker(true);
+    }
+    if(e.key==='Enter'&&picker&&filtered.length){
+      e.preventDefault();insert(filtered[0]);
     }
   };
   const moveReference=(id:string,direction:-1|1)=>{
@@ -243,7 +295,10 @@ export function VideoPromptEditor({
       <button className="tn-ref-attach-add" title="添加已连接的参考素材"
         disabled={!references.length}
         aria-label={references.length?'添加已连接素材引用':'请先连接图片或音频节点'}
-        onClick={()=>{setSearch('');setPicker(p=>references.length>0&&!p);}}>
+        onClick={()=>{
+          captureCaret();mentionMode.current=false;
+          setSearch('');setPicker(p=>references.length>0&&!p);
+        }}>
         <Plus size={19} strokeWidth={1.6}/>
       </button>
       {!!selected.length&&<span className="tn-ref-attachment-count">
@@ -286,12 +341,15 @@ export function VideoPromptEditor({
       onBlur={e=>{
         setFocused(false);
         if(galleryRef.current?.contains(e.relatedTarget as Node))return;
+        mentionMode.current=false;
         setPicker(false);
         commit();
       }}
       onCompositionStart={()=>{composing.current=true;}}
       onCompositionEnd={handleCompositionEnd}
       onInput={()=>{if(!composing.current)commit();}}
+      onKeyUp={captureCaret}
+      onMouseUp={captureCaret}
       onKeyDown={onKeyDown}
       onMouseDown={e=>{
         if((e.target as HTMLElement).closest('.tn-inline-ref'))e.preventDefault();

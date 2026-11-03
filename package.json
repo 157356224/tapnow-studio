@@ -19,6 +19,7 @@
     "test:reference": "node scripts/ui-reference-test.mjs",
     "test:audio-refs": "node scripts/audio-reference-test.mjs && node scripts/reference-selection-test.mjs && node scripts/mp3-to-mp4-test.mjs",
     "test:audio-ui": "node scripts/ui-audio-node-test.mjs",
+    "test:mentions": "node scripts/ui-mention-regression-test.mjs",
     "test:magnet": "node scripts/ui-magnet-test.mjs",
     "test:node-motion": "node scripts/ui-node-motion-test.mjs",
     "test:layout-perf": "node scripts/ui-layout-performance-test.mjs",
