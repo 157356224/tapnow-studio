@@ -27,6 +27,7 @@
     "test:image-intrinsic": "node scripts/ui-image-intrinsic-size-test.mjs",
     "test:feedback": "node scripts/ui-connection-feedback-test.mjs",
     "test:flow-light": "node scripts/ui-flow-light-test.mjs",
+    "test:flow-selection": "node scripts/ui-flow-selection-test.mjs",
     "test:edge-scissors": "node scripts/ui-edge-scissors-test.mjs",
     "test:generation-visual": "node scripts/ui-generation-visual-test.mjs",
     "test:many-edges-performance": "node scripts/ui-many-edges-performance-test.mjs",

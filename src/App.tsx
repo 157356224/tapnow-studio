@@ -119,6 +119,7 @@ function Workspace() {
   const [museQuotaError,setMuseQuotaError]=useState('');
   const [connectionHighlight, setConnectionHighlight] = useState<ConnectionHighlight | null>(null);
   const [draggingNodeId,setDraggingNodeId]=useState<string|null>(null);
+  const [marqueeSelecting,setMarqueeSelecting]=useState(false);
   const [smartGuides,setSmartGuides]=useState<SmartGuides>(null);
   const nodeDragActive=useRef(false);
   const [cutMode,setCutMode]=useState(false);
@@ -151,15 +152,18 @@ function Workspace() {
   // selection/drag state only. Avoid rebuilding every edge per move.
   const selectionKey=nodes.filter(n=>n.selected).map(n=>n.id).join('|');
   const selectedSourceIds=useMemo(()=>new Set(selectionKey?selectionKey.split('|'):[]),[selectionKey]);
+  // Droplet animations are expensive on large fan-out selections. Animate
+  // connected wires only when exactly one node is selected; marquee/Shift
+  // multi-selection renders ordinary static Bezier edges instead.
+  const singleNodeSelected=!marqueeSelecting&&selectedSourceIds.size===1;
   const renderedEdges=useMemo(()=>edges.map(e=>({...e,
-    // Keep flow active while either connected node is moved. React Flow can
-    // temporarily change node selection during a drag.
-    type:selectedSourceIds.has(e.source)||selectedSourceIds.has(e.target)||
-      draggingNodeId===e.source||draggingNodeId===e.target
+    type:singleNodeSelected&&(
+      selectedSourceIds.has(e.source)||selectedSourceIds.has(e.target)||
+      draggingNodeId===e.source||draggingNodeId===e.target)
       ?'blueflow':'bezier',
     style:{stroke:'#4d4d50',strokeWidth:1.9},
     markerEnd:undefined,zIndex:0
-  })),[edges,selectedSourceIds,draggingNodeId]);
+  })),[edges,selectedSourceIds,singleNodeSelected,draggingNodeId]);
   const flowTargetIds=useMemo(()=>new Set(
     edges.filter(e=>selectedSourceIds.has(e.source)).map(e=>e.target)
   ),[edges,selectedSourceIds]);
@@ -893,7 +897,11 @@ function Workspace() {
     setSmartGuides(null);
     setDraggingNodeId(null);
   },[]);
-  const handleSelectionStart=useCallback(()=>setEditorState({id:null,instant:true}),[]);
+  const handleSelectionStart=useCallback(()=>{
+    setMarqueeSelecting(true);
+    setEditorState({id:null,instant:true});
+  },[]);
+  const handleSelectionEnd=useCallback(()=>setMarqueeSelecting(false),[]);
   const handlePaneClick=useCallback(()=>{
     setEditorState({id:null,instant:false});
     setShowAdd(false);
@@ -1120,6 +1128,7 @@ function Workspace() {
             onNodeDragStart={handleNodeDragStart}
             onNodeDragStop={handleNodeDragStop}
             onSelectionStart={handleSelectionStart}
+            onSelectionEnd={handleSelectionEnd}
             onPaneClick={handlePaneClick}
             onPaneContextMenu={handlePaneContext}
             onMove={handleViewportMove}
