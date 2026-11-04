@@ -18,6 +18,9 @@ import { StudioActionsContext } from './nodes';
 import { ConnectionHighlightContext,ConnectionInvalidContext,FlowTargetContext,NodeEditorContext,StudioNodeV2 } from './StudioNodeV2';
 import type { ConnectionHighlight,NodeEditorState } from './StudioNodeV2';
 import {FlowEdge} from './FlowEdge';
+import {SelectionGroupControls} from './SelectionGroupControls';
+import {alignSelectedNodes,planGroupConnections} from './node-alignment.mjs';
+import type {AlignmentMode} from './node-alignment.mjs';
 import { demoImages, defaultVideoModel, kindLabels, models, newData, normalizeVideoNodes, sampleAdCanvas, sampleCanvas, supportedDoubaoVideoModels } from './sample';
 import { referencesForNode, resolveReferences, reorderReferenceNodes } from './doubao';
 import type { DoubaoAccount, DoubaoJob } from './doubao';
@@ -42,7 +45,7 @@ const entryTools: { kind: Kind; label: string; desc: string; icon: typeof ImageI
 const uid = () => crypto.randomUUID();
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 type Panel = 'agent' | 'projects' | 'assets' | 'inspector' | 'doubao' | 'muse' | null;
-type NodeMenuOrigin = {id:string;side:'source'|'target';dropped:boolean};
+type NodeMenuOrigin = {id:string;side:'source'|'target';dropped:boolean;ids?:string[]};
 type History = { nodes: StudioNode[]; edges: StudioEdge[] };
 type Plan = { valid: boolean; steps?: {id: string; kind: Kind}[]; skipped?: string[]; error?: string };
 
@@ -374,6 +377,24 @@ function Workspace() {
   const addFromMenu=useCallback((kind:Kind)=>{
     const from=menuOrigin;
     if(!from){addNode(kind,menuPos.flow);return;}
+    if(from.ids?.length){
+      const location=menuPos.flow||rf.screenToFlowPosition({
+        x:window.innerWidth/2,y:window.innerHeight/2
+      });
+      const id=addNode(kind,{x:location.x,y:location.y-105});
+      const groupSources=from.ids.filter(source=>
+        nodesRef.current.some(node=>node.id===source));
+      setEdges(prev=>{
+        const planned=planGroupConnections(groupSources,id,prev,canConnect);
+        return planned.length?[...prev,...planned.map(edge=>({
+          ...edgeDefaults,...edge,id:uid()
+        }))]:prev;
+      });
+      setMenuOrigin(null);
+      revealNewNode({x:location.x,y:location.y-105},kind);
+      notify('已创建'+kindLabels[kind]+'节点并连接所选节点');
+      return;
+    }
     if(!from.dropped){
       if(from.side==='source')addAfter(from.id,kind);
       else addBefore(from.id,kind);
@@ -389,7 +410,7 @@ function Workspace() {
       ? addEdge({...edgeDefaults,id:uid(),source,target,sourceHandle:'out',targetHandle:'in'},prev)
       : prev);
     setMenuOrigin(null);
-  },[menuOrigin,menuPos.flow,addNode,addAfter,addBefore,rf,setEdges]);
+  },[menuOrigin,menuPos.flow,addNode,addAfter,addBefore,rf,setEdges,revealNewNode,notify]);
   const removeAnimated=useCallback((ids:string[])=>{
     const valid=ids.filter(id=>nodesRef.current.some(n=>n.id===id)&&!removalTimers.current.has(id));
     if(!valid.length)return;
@@ -699,6 +720,60 @@ function Workspace() {
     setEdges(prev => canConnect(connection.source,connection.target,prev)
       ? addEdge({...connection,...edgeDefaults,id:uid()},prev) : prev);
   },[snapshot,setEdges]);
+  const alignGroup=useCallback((mode:AlignmentMode)=>{
+    const current=nodesRef.current;
+    const aligned=alignSelectedNodes(current,mode);
+    if(!aligned.some((node,index)=>node!==current[index]))return;
+    snapshot();
+    setNodes(aligned);
+  },[snapshot,setNodes]);
+  const groupTargets=useCallback((ids:string[],targetId:string)=>{
+    const validIds=ids.filter(id=>nodesRef.current.some(n=>n.id===id));
+    const planned=planGroupConnections(validIds,targetId,edgesRef.current,canConnect);
+    if(!planned.length){notify('没有可连接的节点（可能已连接或会形成循环）');return;}
+    snapshot();
+    setEdges(prev=>{
+      const accepted=planGroupConnections(validIds,targetId,prev,canConnect);
+      return accepted.length?[...prev,...accepted.map(edge=>({
+        ...edgeDefaults,...edge,id:uid()
+      }))]:prev;
+    });
+    notify('已连接 '+planned.length+' 个节点'+
+      (planned.length<validIds.length?'，已跳过重复或不允许的连接':''));
+  },[snapshot,setEdges,notify]);
+  const groupAdd=useCallback((ids:string[],point:{x:number;y:number})=>{
+    const box=rootRef.current?.querySelector('.canvas-container')?.getBoundingClientRect();
+    if(!box||!ids.length)return;
+    setMenuPos({
+      x:Math.max(8,Math.min(point.x-box.left+12,box.width-314)),
+      y:Math.max(8,Math.min(point.y-box.top+12,box.height-264)),
+      flow:rf.screenToFlowPosition(point)
+    });
+    setMenuSearch('');
+    setMenuOrigin({id:ids[0],side:'source',dropped:true,ids});
+    setShowAdd(true);
+  },[rf]);
+  const groupDragStart=useCallback((ids:string[])=>{
+    setEditorState({id:null,instant:true});
+    const blocked=new Set<string>();
+    for(const node of nodesRef.current){
+      if(ids.includes(node.id))continue;
+      if(!ids.some(id=>canConnect(id,node.id,edgesRef.current)))
+        blocked.add(node.id);
+    }
+    setInvalidTargets(blocked);
+  },[]);
+  const groupDragHover=useCallback((target:string|null,ids:string[])=>{
+    if(!target){setConnectionHighlight(null);return false;}
+    const valid=ids.some(id=>canConnect(id,target,edgesRef.current));
+    setConnectionHighlight(prev=>prev?.id===target&&prev.valid===valid&&
+      prev.direction==='ltr'?prev:{id:target,valid,direction:'ltr'});
+    return valid;
+  },[]);
+  const groupDragEnd=useCallback(()=>{
+    setConnectionHighlight(null);
+    setInvalidTargets(new Set());
+  },[]);
   const onConnectStart = useCallback((
     _event: MouseEvent | TouchEvent,
     params: {nodeId:string|null;handleType:'source'|'target'|null}
@@ -1018,6 +1093,10 @@ function Workspace() {
             deleteKeyCode={null} multiSelectionKeyCode="Shift"
             proOptions={{hideAttribution:true}}
           ><Background color="#55565a" gap={23} size={1.3} variant={BackgroundVariant.Dots}/>
+          {nodes.filter(node=>node.selected).length>=2&&
+            <SelectionGroupControls nodes={nodes} zoom={zoom}
+              onAlign={alignGroup} onConnect={groupTargets} onAdd={groupAdd}
+              onStart={groupDragStart} onHover={groupDragHover} onEnd={groupDragEnd}/>}
           {showMinimap&&<MiniMap className="studio-minimap" pannable zoomable position="bottom-right" nodeStrokeWidth={2} nodeColor="#555967" maskColor="#0d0e13aa"/>}
           </ReactFlow>
           </NodeEditorContext.Provider>

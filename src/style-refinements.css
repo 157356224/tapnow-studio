@@ -100,6 +100,54 @@
 @media(prefers-reduced-motion:reduce){
   .tn-node-frame .tn-media.tn-media-reveal{animation:none!important}
 }
+
+/* Selection bounds remain in React Flow coordinates. Controls are placed
+   inside ViewportPortal and counter-scale so their hit areas stay 32px
+   on screen at every zoom level, just like ordinary node ports. */
+.react-flow__nodesselection-rect{
+  background:rgba(162,164,174,.15)!important;
+  border:1px solid #6f7077!important;
+  border-radius:9px;
+}
+.tn-selection-group{z-index:120;overflow:visible;user-select:none}
+.tn-selection-align-toolbar{
+  position:absolute;display:flex;align-items:center;gap:2px;
+  width:max-content;padding:6px 8px;
+  border:1px solid #414146;border-radius:27px;
+  background:#252527;box-shadow:0 7px 22px #0009;
+  transform-origin:0 0;pointer-events:auto;z-index:3;
+}
+.tn-selection-align-toolbar button{
+  width:32px;height:30px;display:grid;place-items:center;
+  background:transparent;border:0;border-radius:17px;
+  color:#d9d9e0;cursor:pointer;
+}
+.tn-selection-align-toolbar button:hover:not(:disabled){
+  background:#44444a;color:#fff;
+}
+.tn-selection-align-toolbar button:disabled{
+  opacity:.3;cursor:default;
+}
+.tn-selection-align-toolbar .tn-group-tool-separator{
+  border-left:1px solid #505057;border-radius:0 15px 15px 0;
+  margin-left:4px;padding-left:4px;width:37px;
+}
+.tn-group-port{
+  position:absolute;display:grid;place-items:center;
+  width:34px;height:34px;
+  color:#ececf3;background:#38383e;
+  border:2px solid #9c9ca9;border-radius:50%;
+  box-shadow:0 2px 7px #0009;
+  pointer-events:auto;cursor:crosshair;
+  transform-origin:0 0;z-index:4;
+  transition:background .15s,border-color .15s,box-shadow .15s;
+  touch-action:none;
+}
+.tn-group-port:hover,.tn-group-port-active{
+  background:#4b4b54;border-color:#e5e5ed;
+  box-shadow:0 0 9px #d3d3e64d;
+}
+.tn-group-connection-preview{z-index:2;filter:drop-shadow(0 1px 3px #0008)}
 .tn-node-frame{transition-duration:.3s}
 .tn-toolbar{animation-duration:.36s}
 .tn-toolbar .tn-toolbar-download{

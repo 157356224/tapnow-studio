@@ -22,6 +22,7 @@
     "test:mentions": "node scripts/ui-mention-regression-test.mjs",
     "test:magnet": "node scripts/ui-magnet-test.mjs",
     "test:node-motion": "node scripts/ui-node-motion-test.mjs",
+    "test:node-group": "node scripts/node-group-layout-test.mjs && node scripts/ui-group-selection-test.mjs",
     "test:layout-perf": "node scripts/ui-layout-performance-test.mjs",
     "test:image-intrinsic": "node scripts/ui-image-intrinsic-size-test.mjs",
     "test:feedback": "node scripts/ui-connection-feedback-test.mjs",
