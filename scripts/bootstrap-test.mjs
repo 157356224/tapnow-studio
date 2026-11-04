@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {
-  bootstrap,dependencyFingerprint,ensureDependencies,syncGit
+  bootstrap,dependencyFingerprint,ensureDependencies,npmInstallEnvironment,syncGit
 } from './bootstrap-core.mjs';
 
 const temp=fs.mkdtempSync(path.join(os.tmpdir(),'tapnow-github-update-'));
@@ -189,7 +189,33 @@ try{
   assert.equal(fs.readFileSync(path.join(local,'server/data/private.json'),'utf8'),
     'PRIVATE_LOCAL_DATA_STAYS','Offline fallback must not modify account data');
 
-  console.log('PASS: updater preserves project data, handles interrupted/partial/stale dependency backups, restores old libraries, and rolls back failed updates');
+  // Only the npm subprocess gets the faster Chinese mirrors. Keep the
+  // original machine environment and project files untouched.
+  const originalEnv={EXAMPLE_SETTING:'keep'};
+  const installEnv=npmInstallEnvironment(originalEnv);
+  assert.deepEqual(originalEnv,{EXAMPLE_SETTING:'keep'});
+  assert.equal(installEnv.npm_config_registry,'https://registry.npmmirror.com/');
+  assert.equal(installEnv.npm_config_replace_registry_host,'npmjs');
+  assert.equal(installEnv.FFMPEG_BINARIES_URL,
+    'https://cdn.npmmirror.com/binaries/ffmpeg-static');
+  assert.equal(installEnv.npm_config_foreground_scripts,'true');
+
+  // Explicit environment variables (including Windows uppercase names)
+  // must take precedence over TapNow's default mirror values.
+  const customEnv=npmInstallEnvironment({
+    NPM_CONFIG_REGISTRY:'https://registry.npmjs.org/',
+    NPM_CONFIG_REPLACE_REGISTRY_HOST:'never',
+    FFMPEG_BINARIES_URL:'https://example.com/ffmpeg-binaries',
+    NPM_CONFIG_FOREGROUND_SCRIPTS:'false'
+  });
+  assert.equal(customEnv.NPM_CONFIG_REGISTRY,'https://registry.npmjs.org/');
+  assert.equal(customEnv.NPM_CONFIG_REPLACE_REGISTRY_HOST,'never');
+  assert.equal(customEnv.FFMPEG_BINARIES_URL,'https://example.com/ffmpeg-binaries');
+  assert.equal(customEnv.NPM_CONFIG_FOREGROUND_SCRIPTS,'false');
+  assert.equal(Object.keys(customEnv).filter(name=>
+    name.toLowerCase()==='npm_config_registry').length,1);
+
+  console.log('PASS: updater preserves project data, recovers dependencies, restores offline fallback, and configures npm/FFmpeg mirrors with user overrides');
 }finally{
   fs.rmSync(temp,{recursive:true,force:true,maxRetries:4,retryDelay:100});
 }

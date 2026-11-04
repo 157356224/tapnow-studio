@@ -127,13 +127,45 @@ function recoverInterruptedDependencies({root,modules,backup,log}){
   log('[TapNow Update] 已恢复上次安装中断前的依赖；保留未完成安装目录：'+partial);
 }
 
+// Keep mirror settings local to this npm child process: don't change the
+// user's global npm configuration or commit a project .npmrc that could
+// collide with an existing untracked file on an older installation.
+const DEFAULT_NPM_MIRROR='https://registry.npmmirror.com/';
+const DEFAULT_FFMPEG_MIRROR='https://cdn.npmmirror.com/binaries/ffmpeg-static';
+export function npmInstallEnvironment(base=process.env){
+  const env={...base};
+  const setDefault=(name,value)=>{
+    const existing=Object.keys(env).find(key=>key.toLowerCase()===name.toLowerCase());
+    if(existing){
+      if(!env[existing])env[existing]=value;
+    }else env[name]=value;
+  };
+  setDefault('npm_config_registry',DEFAULT_NPM_MIRROR);
+  // package-lock.json includes registry.npmjs.org tarball URLs. In npm,
+  // "npmjs" replaces that default host with npm_config_registry.
+  setDefault('npm_config_replace_registry_host','npmjs');
+  setDefault('FFMPEG_BINARIES_URL',DEFAULT_FFMPEG_MIRROR);
+  // Show progress from ffmpeg-static's binary download instead of
+  // appearing stuck on npm's spinner while its install script runs.
+  setDefault('npm_config_foreground_scripts','true');
+  return env;
+}
+
 function installNpm(root){
   const windows=process.platform==='win32';
   const executable=windows?(process.env.ComSpec||'cmd.exe'):'npm';
   const args=windows?['/d','/s','/c','npm ci --no-audit --no-fund']:
     ['ci','--no-audit','--no-fund'];
+  const env=npmInstallEnvironment();
+  const configured=name=>Object.entries(env).find(([key])=>
+    key.toLowerCase()===name.toLowerCase())?.[1];
+  const safeHost=url=>{
+    try{return new URL(url).origin;}catch{return '[自定义源]';}
+  };
+  console.log('[TapNow Update] npm 下载源：'+safeHost(configured('npm_config_registry')));
+  console.log('[TapNow Update] FFmpeg 二进制镜像：'+safeHost(configured('FFMPEG_BINARIES_URL')));
   const result=spawnSync(executable,args,{
-    cwd:root,stdio:'inherit',windowsHide:false,timeout:600000
+    cwd:root,stdio:'inherit',windowsHide:false,timeout:600000,env
   });
   if(result.status!==0)throw new Error('npm ci 失败（code '+result.status+
     '）：'+(result.error?.message||'请检查 npm 网络连接'));
