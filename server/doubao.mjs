@@ -11,6 +11,7 @@ import { runSeedanceBrowser } from './doubao-runner.mjs';
 import { validateMediaReferences } from './doubao-protocol.mjs';
 import { setProjectJob } from './doubao-project.mjs';
 import {closeCompletedBrowser} from './browser-cleanup.mjs';
+import {scheduleAccountJob} from './account-queue.mjs';
 import {
   browserLaunchOptions,accountEngine,accountProfileDir,nativeBrowserExecutable
 } from './chromium-binary.mjs';
@@ -256,16 +257,14 @@ async function runJob(job){
 }
 function startJob(job){
   if(activeJobs.has(job.id))return;
-  // Launch/focus the selected account browser NOW, not after waiting behind
-  // earlier long-running video jobs. This is also the login preflight.
-  updateJob(job.id,{status:'starting',progress:1,
-    message:'正在打开并唤起对应豆包账号浏览器'});
-  const opening=openBrowser(job.accountId);
-  // One account owns one active tab, so actual submissions remain sequential.
-  // Different accounts keep independent queues and can operate concurrently.
-  const previous=accountQueues.get(job.accountId)||Promise.resolve();
-  const task=(async()=>{
-    const {page}=await opening;
+  const alreadyBusy=accountQueues.has(job.accountId);
+  updateJob(job.id,{status:'queued',progress:0,message:alreadyBusy
+    ?'该豆包账号已有任务，等待同账号前序任务'
+    :'正在并行启动选定豆包账号的独立 Edge'});
+  // Preflight/login must also run INSIDE the per-account queue: otherwise a
+  // second job can navigate the first job's active browser tab.
+  const task=scheduleAccountJob(accountQueues,job.accountId,async()=>{
+    const {page}=await openBrowser(job.accountId);
     if(await requiresWebLogin(page)){
       await showWebLogin(page);
       const message='豆包账号尚未登录。已打开浏览器登录界面，登录后重新点击视频节点发送。';
@@ -274,11 +273,8 @@ function startJob(job){
       persistProjectNode(job,{status:'error',progress:0,jobMessage:message});
       return;
     }
-    updateJob(job.id,{status:'queued',progress:0,
-      message:'浏览器已打开，等待该账号前序视频任务结束'});
-    await previous.catch(()=>undefined);
     await runJob(job);
-  })().catch(e=>{
+  }).catch(e=>{
     const message=String(e?.message||e).slice(0,400);
     const needsLogin=!!e?.loginRequired;
     updateJob(job.id,{status:needsLogin?'needs-login':'needs-attention',
@@ -292,10 +288,6 @@ function startJob(job){
     });
   }).finally(()=>activeJobs.delete(job.id));
   activeJobs.set(job.id,task);
-  // Keep earlier work in the queue even when a later task immediately fails
-  // its login preflight; that failure must not erase the previous task tail.
-  accountQueues.set(job.accountId,
-    Promise.allSettled([previous,task]).then(()=>undefined));
 }
 export function mountDoubaoRoutes(app,readProjects,writeProjects){
   projectRead=readProjects;
@@ -364,6 +356,8 @@ export function mountDoubaoRoutes(app,readProjects,writeProjects){
   app.delete('/api/doubao/accounts/:id',async(req,res)=>{
     const id=req.params.id;
     if(!validId(id)||!findAccount(id))return res.status(404).json({error:'账号不存在'});
+    if(activeAccountJob(id))
+      return res.status(409).json({error:'该豆包账号有进行中或排队中的任务，请完成后再删除账号'});
     if(nativeBrowsers.get(id)?.exitCode===null)
       return res.status(409).json({error:'请先关闭该账号原生浏览器，再删除其资料'});
     if(browsers.has(id))await browsers.get(id).close();
@@ -408,7 +402,8 @@ export function mountDoubaoRoutes(app,readProjects,writeProjects){
       const job={id:crypto.randomUUID(),accountId,projectId,nodeId,
         model,prompt,
         ratio,duration,
-        references,status:'queued',progress:0,message:'排队启动浏览器',
+        references,status:'queued',progress:0,
+        message:'已分配豆包账号 '+(findAccount(accountId)?.name||'')+'，准备启动独立 Edge',
         createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
       jobs.set(job.id,job);writeJSON(jobsFile,[...jobs.values()].slice(-300));
       persistProjectNode(job,{

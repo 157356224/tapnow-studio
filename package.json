@@ -56,6 +56,8 @@
     "test:reference-selection": "node scripts/reference-selection-test.mjs",
     "test:reference-order-ui": "node scripts/ui-reference-order-test.mjs",
     "test:muse-runner": "node scripts/muse-runner-test.mjs",
+    "test:account-parallel": "node scripts/account-parallel-test.mjs",
+    "test:parallel-ui": "node scripts/ui-parallel-generation-test.mjs",
     "test:muse-ui": "node scripts/ui-muse-provider-test.mjs",
     "test:duration": "node scripts/doubao-duration-test.mjs",
     "test:submit": "node scripts/doubao-submit-test.mjs",

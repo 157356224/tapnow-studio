@@ -15,6 +15,7 @@ import {
 } from './muse-runner.mjs';
 import {setMuseProjectJob} from './muse-project.mjs';
 import {closeCompletedBrowser} from './browser-cleanup.mjs';
+import {scheduleAccountJob} from './account-queue.mjs';
 import {
   MUSE_QUOTA_REFRESH_MS,fetchMuseQuotaInPage,combineMuseQuotas,
   chooseMuseAutoAccount
@@ -251,13 +252,18 @@ async function execute(job){
 
 function startJob(job){
   if(activeJobs.has(job.id))return;
-  updateJob(job.id,{status:'starting',
-    message:(job.allocationVerified===false?'额度尚未核验，自动轮换尝试：':'正在使用 ')+
-      (account(job.accountId)?.name||'Muse')+' 的独立 Edge',
-    progress:2});
-  // A single account has one browser/profile; serialize new-chat and submit.
-  const prior=queues.get(job.accountId)||Promise.resolve();
-  const task=prior.catch(()=>{}).then(()=>execute(job)).catch(err=>{
+  const waiting=queues.has(job.accountId);
+  updateJob(job.id,{status:waiting?'queued':'starting',
+    message:waiting?'该 Muse 账号正在生成，等待同账号前序任务':
+      '正在使用 '+(account(job.accountId)?.name||'Muse')+' 的独立 Edge',
+    progress:waiting?0:2});
+  // Different account profiles run concurrently; only tasks on the same
+  // profile wait for that account's previous task to finish.
+  const task=scheduleAccountJob(queues,job.accountId,()=>{
+    updateJob(job.id,{status:'starting',progress:2,
+      message:'正在使用 '+(account(job.accountId)?.name||'Muse')+' 的独立 Edge'});
+    return execute(job);
+  }).catch(err=>{
     const message=String(err.message||err);
     const needsLogin=!!err.loginRequired;
     updateJob(job.id,{status:needsLogin?'needs-login':'needs-attention',
@@ -265,7 +271,6 @@ function startJob(job){
     persist(job,{status:'error',progress:0,jobMessage:message.slice(0,260)});
   }).finally(()=>activeJobs.delete(job.id));
   activeJobs.set(job.id,task);
-  queues.set(job.accountId,task.then(()=>{},()=>{}));
 }
 
 export function mountMuseRoutes(app,readProjects,writeProjects){
@@ -339,7 +344,7 @@ export function mountMuseRoutes(app,readProjects,writeProjects){
     if(!job)return res.status(404).json({error:'Muse 任务不存在'});
     res.json(job);
   });
-  app.post('/api/muse/jobs',async(req,res)=>{
+  app.post('/api/muse/jobs',(req,res)=>{
     try{
       const {projectId,nodeId}=req.body||{};
       let {accountId}=req.body||{};
@@ -347,14 +352,25 @@ export function mountMuseRoutes(app,readProjects,writeProjects){
       if(!accountId||accountId==='auto'){
         const all=read(accountsFile);
         if(!all.length)throw new Error('请先添加 Muse 账号并完成独立 Edge 登录');
-        await refreshAllQuotas();
+        // Never await quota scans (which may open Edge profiles) on the job
+        // submission path: accepting a second job must not wait on the first
+        // account's browser or a minutes-long background quota refresh.
         const ready=all.filter(x=>nativeBrowsers.get(x.id)?.exitCode!==null);
-        const busy=new Set(ready.filter(x=>active(x.id)).map(x=>x.id));
+        const busy=new Set(ready.filter(x=>
+          active(x.id)||queues.has(x.id)).map(x=>x.id));
+        const queueDepths=new Map(ready.map(x=>{
+          const count=[...jobs.values()].filter(job=>
+            job.accountId===x.id&&
+            ['queued','starting','running'].includes(job.status)).length;
+          return [x.id,Math.max(count,queues.has(x.id)?1:0)];
+        }));
         const lastUsed=new Map();
         for(const job of jobs.values())
           lastUsed.set(job.accountId,Math.max(lastUsed.get(job.accountId)||0,
             Date.parse(job.createdAt)||0));
-        const best=chooseMuseAutoAccount(ready,quotaStates,{busyIds:busy,lastUsed});
+        const best=chooseMuseAutoAccount(ready,quotaStates,{
+          busyIds:busy,lastUsed,queueDepths
+        });
         if(!best)
           throw new Error('没有已确认剩余额度大于 0 且已关闭登录窗口的 Muse 账号；请查看左侧 Muse 额度并检查登录状态');
         accountId=best.id;
@@ -386,8 +402,10 @@ export function mountMuseRoutes(app,readProjects,writeProjects){
           :undefined,
         duration:String(req.body?.duration||node.data.duration||'5s'),
         status:'queued',progress:0,
-        message:allocationVerified===false?'额度暂不可读，自动轮换账号尝试生成':
-          '等待 Muse 独立 Edge 浏览器',createdAt:new Date().toISOString(),
+        message:'已分配 '+(account(accountId)?.name||'Muse')+
+          (allocationVerified===false?'（额度暂不可读）':'')+
+          (active(accountId)?'，该账号繁忙，已加入队列':'，准备并行启动独立 Edge'),
+        createdAt:new Date().toISOString(),
         updatedAt:new Date().toISOString()};
       buildMusePrompt(job);
       jobs.set(job.id,job);write(jobsFile,[...jobs.values()].slice(-300));

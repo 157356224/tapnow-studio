@@ -512,7 +512,7 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
               onChange={e=>api.update(id,museMode
                 ?{museAccountId:e.target.value}:{accountId:e.target.value})}>
               {museMode?
-                <option value="auto">自动选择有剩余额度的账号</option>:
+                <option value="auto">自动选择空闲账号（优先有额度）</option>:
                 <option value="">选择豆包账号</option>}
               {(museMode?api.museAccounts:api.accounts).map(a=><option key={a.id} value={a.id}>
                 {a.name}

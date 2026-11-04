@@ -47,6 +47,14 @@ assert.equal(chooseMuseQuotaAccount(accounts,map,new Set(['a','b']),now),null);
 assert.equal(chooseMuseQuotaAccount(accounts,map,new Set(),now+MUSE_QUOTA_REFRESH_MS*3),null);
 assert.deepEqual(chooseMuseAutoAccount(accounts,map,{asOf:now}),
   {id:'a',verified:true,remaining:91});
+assert.deepEqual(chooseMuseAutoAccount(accounts,map,{
+  asOf:now,busyIds:new Set(['a'])
+}),{id:'b',verified:true,remaining:25},
+  'Busy high-quota account must not block parallel work on idle account');
+assert.deepEqual(chooseMuseAutoAccount(accounts,map,{
+  asOf:now,busyIds:new Set(['a','b'])
+}),{id:'a',verified:true,remaining:91},
+  'If only eligible profiles are busy, queue behind a valid profile instead of a login-error account');
 const unknownMap=new Map([
   ['a',{status:'error',error:'接口需要升级'}],
   ['b',{status:'error',error:'接口需要升级'}],

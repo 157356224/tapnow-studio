@@ -9,7 +9,7 @@ import {setMuseProjectJob,preserveMuseCompletedMedia} from '../server/muse-proje
 const root=path.resolve('work','.tmp-muse-api-'+crypto.randomUUID());
 const server=path.join(root,'server');
 fs.mkdirSync(server,{recursive:true});
-for(const filename of ['muse.mjs','muse-runner.mjs','muse-project.mjs','muse-quota.mjs',
+for(const filename of ['muse.mjs','muse-runner.mjs','muse-project.mjs','muse-quota.mjs','account-queue.mjs',
   'browser-cleanup.mjs',
   'reference-selection.mjs',
   'chromium-binary.mjs'])

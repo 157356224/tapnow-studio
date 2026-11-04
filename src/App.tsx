@@ -134,6 +134,8 @@ function Workspace() {
   const connectionStart = useRef<{nodeId:string;handleType:'source'|'target'} | null>(null);
   const viewport = useRef({x:0,y:0,zoom:1});
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const projectSaveTail=useRef<Promise<void>>(Promise.resolve());
+  const generatingNodeIds=useRef(new Set<string>());
   const history = useRef<History[]>([]);
   const forward = useRef<History[]>([]);
   const clipboard = useRef<StudioNode[]>([]);
@@ -282,13 +284,27 @@ function Workspace() {
     return () => { active = false; };
   }, []); // one-time initial load
 
+  // Serialize full-project PUTs. Two fast submissions used to race: a stale
+  // snapshot from node A could arrive AFTER node B's queued state was saved.
+  // Each POST /jobs still runs independently once its own snapshot is saved.
+  const saveProjectSnapshot=useCallback((
+    id:string,content:Pick<Project,'title'|'nodes'|'edges'|'viewport'>
+  )=>{
+    const task=projectSaveTail.current.then(()=>request<{id:string;updatedAt:string}>(
+      '/api/projects/'+id,{
+        method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(content)
+      }
+    ));
+    projectSaveTail.current=task.then(()=>{},()=>{});
+    return task;
+  },[]);
   const saveNow = useCallback(async () => {
     if (!projectId || !ready) return;
     try {
       setSaveStatus('正在保存…');
-      const r = await request<{id:string;updatedAt:string}>('/api/projects/' + projectId, {
-        method:'PUT', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({ title, nodes:nodesRef.current, edges:edgesRef.current, viewport:viewport.current })
+      const r=await saveProjectSnapshot(projectId,{
+        title,nodes:nodesRef.current,edges:edgesRef.current,viewport:viewport.current
       });
       setSaveStatus('已保存到本地');
       setProjects(ps => ps.map(p => p.id === projectId ? {...p,title,updatedAt:r.updatedAt} : p));
@@ -296,7 +312,7 @@ function Workspace() {
       setSaveStatus('保存失败');
       localStorage.setItem('tapnow-local-backup', JSON.stringify({title,nodes:nodesRef.current,edges:edgesRef.current,viewport:viewport.current}));
     }
-  }, [projectId, ready, title]);
+  }, [projectId, ready, title, saveProjectSnapshot]);
   useEffect(() => {
     if (!ready) return;
     setSaveStatus('有未保存的更改');
@@ -493,6 +509,11 @@ function Workspace() {
     if (!source) return;
     const kind=kindOverride || (source.data.kind==='text'?'image':source.data.kind);
     if (['running','queued'].includes(source.data.status||'')) return;
+    // React state may not have committed the queued flag on a rapid double
+    // click. Guard only THIS node; other nodes remain free to submit jobs.
+    if(generatingNodeIds.current.has(id))return;
+    generatingNodeIds.current.add(id);
+    try{
     const museMode=(source.data.kind==='image'&&kind==='image')||
       (source.data.kind==='video'&&kind==='video'&&source.data.provider==='muse');
     if(museMode){
@@ -530,10 +551,8 @@ function Workspace() {
             jobMessage:'Muse：正在启动独立 Edge 并准备新建会话'}}:node);
         nodesRef.current=staged;setNodes(staged);
         setSaveStatus('正在保存…');
-        const saved=await request<{updatedAt:string}>('/api/projects/'+projectId,{
-          method:'PUT',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({title,nodes:staged,
-            edges:edgesRef.current,viewport:viewport.current})
+        const saved=await saveProjectSnapshot(projectId,{
+          title,nodes:staged,edges:edgesRef.current,viewport:viewport.current
         });
         setSaveStatus('已保存到本地');
         setProjects(ps=>ps.map(p=>p.id===projectId?
@@ -546,7 +565,8 @@ function Workspace() {
           duration:source.data.duration||'5s',
           references:museRefs.map(ref=>({id:ref.id}))
         }));
-        update(id,{jobId:job.id,status:'queued',progress:0,jobMessage:job.message});
+        update(id,{jobId:job.id,status:'queued',progress:0,
+          jobMessage:job.message});
         for(let attempt=0;attempt<1000;attempt++){
           await pause(1900);
           const status=await request<MuseJob>('/api/muse/jobs/'+job.id);
@@ -619,10 +639,8 @@ function Workspace() {
         nodesRef.current=stagedNodes;
         setNodes(stagedNodes);
         setSaveStatus('正在保存…');
-        const saved=await request<{updatedAt:string}>('/api/projects/'+projectId,{
-          method:'PUT',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({title,nodes:stagedNodes,
-            edges:edgesRef.current,viewport:viewport.current})
+        const saved=await saveProjectSnapshot(projectId,{
+          title,nodes:stagedNodes,edges:edgesRef.current,viewport:viewport.current
         });
         setSaveStatus('已保存到本地');
         setProjects(ps=>ps.map(p=>p.id===projectId?{...p,updatedAt:saved.updatedAt}:p));
@@ -678,7 +696,10 @@ function Workspace() {
     setNodes(prev=>[...prev.map(n=>n.id===id?{...n,data:{...n.data,status:'done' as const,progress:100}}:n),child]);
     setEdges(prev=>addEdge({...edgeDefaults,id:uid(),source:id,target:childId},prev));
     notify('已创建演示结果节点（未调用 AI 模型）');
-  },[snapshot,update,setNodes,setEdges,notify,projectId,referencesFor,title,museAccounts.length]);
+    }finally{
+      generatingNodeIds.current.delete(id);
+    }
+  },[snapshot,update,setNodes,setEdges,notify,projectId,referencesFor,title,museAccounts.length,saveProjectSnapshot]);
   const runWorkflow=useCallback(async()=>{
     if(running || !nodesRef.current.length)return;
     try{
@@ -1284,7 +1305,7 @@ function Workspace() {
                 <label>Muse 独立浏览器账号
                   <select value={selected.data.museAccountId||'auto'}
                     onChange={e=>update(selected.id,{museAccountId:e.target.value})}>
-                    <option value="auto">自动选择（优先有剩余额度的账号）</option>
+                    <option value="auto">自动选择空闲账号（优先有额度）</option>
                     {museAccounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}
                   </select>
                   <button className="doubao-quick-settings" onClick={()=>setPanel('muse')}>

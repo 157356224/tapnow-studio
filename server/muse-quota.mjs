@@ -82,20 +82,25 @@ export function chooseMuseQuotaAccount(accounts,quotas,busyIds=new Set(),asOf=Da
 }
 
 export function chooseMuseAutoAccount(accounts,quotas,{
-  busyIds=new Set(),lastUsed=new Map(),asOf=Date.now()
+  busyIds=new Set(),lastUsed=new Map(),queueDepths=new Map(),asOf=Date.now()
 }={}){
-  let verified=chooseMuseQuotaAccount(accounts,quotas,busyIds,asOf);
-  if(!verified)verified=chooseMuseQuotaAccount(accounts,quotas,new Set(),asOf);
-  if(verified)return {id:verified.id,verified:true,remaining:verified.remaining};
-  // If the action endpoint changed, keep basic generation usable. Unknown
-  // quota accounts are a fallback only: never treat them as "100% remaining".
+  // An idle account ALWAYS precedes a busy one, even if its quota has not
+  // been verified yet. This is essential for parallel image/video jobs.
   const rows=combineMuseQuotas(accounts,quotas,asOf).rows;
-  const candidates=rows.filter(row=>row.status!=='ok'&&
-    !/未登录|登录窗口未关闭/.test(row.error||''));
-  candidates.sort((a,b)=>(busyIds.has(a.id)?1:0)-(busyIds.has(b.id)?1:0)||
-    (lastUsed.get(a.id)||0)-(lastUsed.get(b.id)||0)||a.id.localeCompare(b.id));
-  const fallback=candidates[0];
-  return fallback?{id:fallback.id,verified:false,remaining:null}:null;
+  const candidates=rows.filter(row=>row.status==='ok'
+    ?row.remaining>0&&row.quotaStatus!=='EXHAUSTED'
+    :!/未登录|尚未登录|需要登录|登录窗口未关闭/.test(row.error||''));
+  const idle=candidates.filter(row=>!busyIds.has(row.id));
+  const pool=idle.length?idle:candidates;
+  pool.sort((a,b)=>
+    (queueDepths.get(a.id)||0)-(queueDepths.get(b.id)||0)||
+    (a.status==='ok'?0:1)-(b.status==='ok'?0:1)||
+    (a.status==='ok'?(b.remaining||0)-(a.remaining||0):0)||
+    (lastUsed.get(a.id)||0)-(lastUsed.get(b.id)||0)||
+    a.id.localeCompare(b.id));
+  const chosen=pool[0];
+  return chosen?{id:chosen.id,verified:chosen.status==='ok',
+    remaining:chosen.status==='ok'?chosen.remaining:null}:null;
 }
 
 // Runs inside that account's authenticated muse.ai browser page and never
