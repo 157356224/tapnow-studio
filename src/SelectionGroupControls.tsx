@@ -1,38 +1,21 @@
 import {useCallback,useEffect,useRef,useState} from 'react';
 import type {PointerEvent as ReactPointerEvent} from 'react';
 import {ViewportPortal,getNodesBounds,useReactFlow} from '@xyflow/react';
-import {
-  AlignHorizontalJustifyCenter,AlignHorizontalJustifyEnd,AlignHorizontalJustifyStart,
-  AlignVerticalJustifyCenter,AlignVerticalJustifyEnd,AlignVerticalJustifyStart,
-  BetweenHorizontalStart,BetweenVerticalStart,Plus
-} from 'lucide-react';
+import {Plus} from 'lucide-react';
 import type {StudioNode,StudioEdge} from './types';
-import type {AlignmentMode} from './node-alignment.mjs';
 
 type ScreenPoint={x:number;y:number};
 type Props={
   nodes:StudioNode[];
   zoom:number;
-  onAlign:(mode:AlignmentMode)=>void;
   onConnect:(sources:string[],target:string)=>void;
   onAdd:(sources:string[],point:ScreenPoint)=>void;
   onStart:(sources:string[])=>void;
   onHover:(target:string|null,sources:string[])=>boolean;
   onEnd:()=>void;
 };
-const actions=[
-  {mode:'left',title:'左对齐',Icon:AlignHorizontalJustifyStart},
-  {mode:'center-x',title:'水平居中',Icon:AlignHorizontalJustifyCenter},
-  {mode:'right',title:'右对齐',Icon:AlignHorizontalJustifyEnd},
-  {mode:'top',title:'顶部对齐',Icon:AlignVerticalJustifyStart},
-  {mode:'center-y',title:'垂直居中',Icon:AlignVerticalJustifyCenter},
-  {mode:'bottom',title:'底部对齐',Icon:AlignVerticalJustifyEnd},
-  {mode:'distribute-x',title:'水平等间距',Icon:BetweenHorizontalStart},
-  {mode:'distribute-y',title:'垂直等间距',Icon:BetweenVerticalStart}
-] as const;
-
 export function SelectionGroupControls({
-  nodes,zoom,onAlign,onConnect,onAdd,onStart,onHover,onEnd
+  nodes,zoom,onConnect,onAdd,onStart,onHover,onEnd
 }:Props){
   const rf=useReactFlow<StudioNode,StudioEdge>();
   const cleanup=useRef<(()=>void)|null>(null);
@@ -42,7 +25,6 @@ export function SelectionGroupControls({
   const bounds=getNodesBounds(selected);
   const inverse=1/Math.max(zoom,.1);
   const portX=bounds.width+29*inverse,portY=bounds.height/2;
-  const portFlow={x:bounds.x+portX,y:bounds.y+portY};
   const selectedIds=selected.map(node=>node.id);
 
   useEffect(()=>()=>cleanup.current?.(),[]);
@@ -106,20 +88,6 @@ export function SelectionGroupControls({
     <div className="tn-selection-group" data-testid="node-selection-group"
       style={{position:'absolute',left:bounds.x,top:bounds.y,
         width:bounds.width,height:bounds.height,pointerEvents:'none'}}>
-      <div className="tn-selection-align-toolbar" role="toolbar"
-        aria-label="多节点对齐工具" style={{
-          left:bounds.width/2,top:-15*inverse,
-          transform:'scale('+inverse+') translate(-50%,-100%)'
-        }}>
-        {actions.map(({mode,title,Icon},index)=>
-          <button key={mode} type="button" title={title} aria-label={title}
-            className={index===3||index===6?'tn-group-tool-separator':''}
-            disabled={mode.startsWith('distribute')&&selected.length<3}
-            onPointerDown={e=>e.stopPropagation()}
-            onClick={e=>{e.stopPropagation();onAlign(mode);}}>
-            <Icon size={15} strokeWidth={1.8}/>
-          </button>)}
-      </div>
       {pointer&&<svg className="tn-group-connection-preview"
         width="1" height="1" aria-hidden="true"
         style={{position:'absolute',left:0,top:0,overflow:'visible',pointerEvents:'none'}}>

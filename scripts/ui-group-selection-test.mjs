@@ -65,20 +65,68 @@ try{
   await target.waitFor({state:'visible',timeout:18000});
   console.log('UI group: target appeared');
   await page.waitForTimeout(520);
+  // Dragging a single node near another node must show Photoshop-style
+  // alignment guides and snap its position before mouseup.
+  const originA=await a.boundingBox(),originB=await b.boundingBox();
+  const captionB=await b.locator('.tn-node-caption').boundingBox();
+  assert.ok(originA&&originB&&captionB);
+  const grab={x:captionB.x+captionB.width/2,y:captionB.y+captionB.height/2};
+  const delta={x:originA.x-originB.x+4,y:originA.y-originB.y+4};
+  await page.mouse.move(grab.x,grab.y);
+  await page.mouse.down();
+  await page.mouse.move(grab.x+delta.x,grab.y+delta.y,{steps:22});
+  // React Flow's pointer-down drag threshold can add a small initial offset.
+  // Calibrate against actual rendered positions before asserting the snap.
+  const near=await b.boundingBox();
+  assert.ok(near);
+  await page.mouse.move(
+    grab.x+delta.x+originA.x-near.x+3,
+    grab.y+delta.y+originA.y-near.y+3,{steps:6});
+  await page.waitForTimeout(110);
+  console.log('UI smart-guide drag geometry',JSON.stringify({
+    a:originA,b:originB,moved:await b.boundingBox(),
+    dragging:await b.getAttribute('class'),
+    guides:await page.locator('.tn-smart-guide').count()
+  }));
+  assert.ok(await page.locator('[data-testid="smart-guide-vertical"]').count()>0,
+    'Moving node near other node left edge must show vertical smart guide');
+  assert.ok(await page.locator('[data-testid="smart-guide-horizontal"]').count()>0,
+    'Moving node near other node top edge must show horizontal smart guide');
+  const snappedB=await b.boundingBox();
+  assert.ok(snappedB&&Math.abs(snappedB.x-originA.x)<3&&
+    Math.abs(snappedB.y-originA.y)<3,
+  'Dragging near edge must magnetically snap the node to the reference bounds');
+  await page.mouse.up();
+  await page.waitForTimeout(120);
+  assert.equal(await page.locator('.tn-smart-guide').count(),0,
+    'Guides must disappear immediately after releasing the drag');
+  await page.keyboard.press('Control+z');
+  await page.waitForTimeout(160);
+  const undoB=await b.boundingBox();
+  assert.ok(undoB&&Math.abs(undoB.x-originB.x)<4,
+    'Ctrl+Z restores the original position after magnetic drag');
   const select=async()=>{
     await a.locator('.tn-node-caption').click();
     await b.locator('.tn-node-caption').click({modifiers:['Shift']});
-    await page.locator('.tn-selection-align-toolbar').waitFor({
+    await page.locator('.tn-group-port').waitFor({
       state:'visible',timeout:3000
     });
     assert.equal(await page.locator('.react-flow__node.selected').count(),2);
   };
   await select();
   console.log('UI group: selected two nodes');
-  const toolbar=page.getByRole('toolbar',{name:'多节点对齐工具'});
   const plus=page.getByRole('button',{name:'连接所选节点'});
-  assert.equal(await toolbar.getByRole('button').count(),8);
+  assert.equal(await page.locator('.tn-selection-align-toolbar').count(),0,
+    'Multi-node alignment toolbar must not exist in selection mode');
   await plus.waitFor({state:'visible'});
+  const individualPortState=await page.locator('.react-flow__node .tn-port')
+    .evaluateAll(elements=>elements.map(el=>({
+      visibility:getComputedStyle(el).visibility,
+      events:getComputedStyle(el).pointerEvents
+    })));
+  assert.ok(individualPortState.length>=6&&individualPortState.every(p=>
+    p.visibility==='hidden'&&p.events==='none'),
+  'During multi-selection, all individual left/right + controls must be hidden');
   // Selection plus is placed beyond the right edge of the combined bounding
   // rectangle rather than on the last selected node.
   const group=await page.locator('[data-testid="node-selection-group"]').boundingBox();
@@ -90,16 +138,6 @@ try{
   const zoomedPort=await plus.boundingBox();
   assert.ok(zoomedPort&&Math.abs(zoomedPort.width-34)<3,
     'Group + must stay approximately 34 screen pixels across canvas zoom levels');
-  await toolbar.getByRole('button',{name:'左对齐'}).click();
-  console.log('UI group: clicked left align');
-  const alignedA=await a.boundingBox(),alignedB=await b.boundingBox();
-  assert.ok(alignedA&&alignedB&&Math.abs(alignedA.x-alignedB.x)<3,
-    'Toolbar left align must put mixed-position nodes at same X');
-  await page.keyboard.press('Control+z');
-  await page.waitForTimeout(100);
-  const restored=await b.boundingBox();
-  assert.ok(restored&&restored.x-alignedA.x>180,
-    'Ctrl+Z must undo group alignment in one history step');
   // Drag right group + into the middle of the video card. All selected
   // sources must connect, including a drop that misses the tiny target handle.
   const plusBox=await plus.boundingBox(),videoBox=await target.locator('.tn-node-frame').boundingBox();
@@ -148,7 +186,7 @@ try{
     'Both selected sources should connect to the newly created node');
   assert.deepEqual(errors,[],errors.join(' | '));
   assert.ok(saved.length>0,'Group changes must persist to project storage');
-  console.log('PASS: multi-select toolbar, visible group +, align/undo, drag fan-out to node card, persistence, no duplicate edges');
+  console.log('PASS: drag smart guides and snapping/undo, no selection toolbar or individual +, group-only + fan-out and persistence');
 }finally{
   await browser?.close();
 }

@@ -1,44 +1,53 @@
 import assert from 'node:assert/strict';
-import {alignSelectedNodes,planGroupConnections} from '../src/node-alignment.mjs';
+import {planGroupConnections} from '../src/node-alignment.mjs';
+import {snapNodePositionChanges} from '../src/node-smart-guides.mjs';
 
 const node=(id,x,y,w,h,selected=true)=>({
   id,selected,position:{x,y},measured:{width:w,height:h}
 });
 const nodes=[
-  node('a',60,80,200,100),
-  node('b',480,290,400,190),
-  node('c',1000,520,150,140),
-  node('other',40,45,400,280,false)
+  node('ref',400,200,300,200,false),
+  node('moving',100,100,150,100),
+  node('other',1000,700,200,120,false)
 ];
-const unchanged=alignSelectedNodes(nodes,'distribute-x');
-assert.equal(unchanged[3],nodes[3],'Unselected nodes must be untouched');
-assert.deepEqual(alignSelectedNodes(nodes,'left').slice(0,3)
-  .map(n=>n.position.x),[60,60,60]);
-assert.deepEqual(alignSelectedNodes(nodes,'right').slice(0,3)
-  .map(n=>n.position.x),[950,750,1000]);
-assert.deepEqual(alignSelectedNodes(nodes,'top').slice(0,3)
-  .map(n=>n.position.y),[80,80,80]);
-assert.deepEqual(alignSelectedNodes(nodes,'bottom').slice(0,3)
-  .map(n=>n.position.y),[560,470,520]);
-assert.deepEqual(alignSelectedNodes(nodes,'center-x').slice(0,3)
-  .map(n=>n.position.x),[505,405,530]);
-assert.deepEqual(alignSelectedNodes(nodes,'center-y').slice(0,3)
-  .map(n=>n.position.y),[320,275,300]);
-const spaced=alignSelectedNodes(nodes,'distribute-x');
-const positions=spaced.slice(0,3).map(n=>n.position.x);
-assert.equal(positions[0],60);
-assert.equal(positions[2],1000);
-assert.ok(Math.abs(
-  (positions[1]-(positions[0]+200))-
-  (positions[2]-(positions[1]+400))
-)<.0001,'Horizontal distribution uses equal edge gaps even for mixed node widths');
-const vertical=alignSelectedNodes(nodes,'distribute-y');
-assert.ok(Math.abs(
-  (vertical[1].position.y-(vertical[0].position.y+100))-
-  (vertical[2].position.y-(vertical[1].position.y+190))
-)<.0001,'Vertical distribution uses equal edge gaps');
-assert.equal(alignSelectedNodes(nodes.slice(0,1),'left').length,1);
-assert.equal(alignSelectedNodes(nodes.slice(0,2),'distribute-x')[1].position.x,480);
+const move=(x,y)=>[{id:'moving',type:'position',position:{x,y},dragging:true}];
+const topLeft=snapNodePositionChanges(nodes,move(393,193),1);
+assert.deepEqual(topLeft.changes[0].position,{x:400,y:200},
+  'Dragging near reference left and top edges snaps in both axes');
+assert.equal(topLeft.guides.vertical.x,400);
+assert.equal(topLeft.guides.horizontal.y,200);
+const center=snapNodePositionChanges([
+  nodes[0],node('moving',20,20,100,80)
+],[{id:'moving',type:'position',position:{x:504,y:266}}],1);
+assert.deepEqual(center.changes[0].position,{x:500,y:260},
+  'Smart guides snap center-to-center for differently sized nodes');
+const rightBottom=snapNodePositionChanges(nodes,move(547,303),1);
+assert.deepEqual(rightBottom.changes[0].position,{x:550,y:300},
+  'Right and bottom edges can snap against the other card');
+const away=snapNodePositionChanges(nodes,move(180,88),1);
+assert.equal(away.guides,null,'No guide outside threshold');
+assert.deepEqual(away.changes,move(180,88),'No snap outside threshold');
+const zoomIn=snapNodePositionChanges(nodes,move(393,193),2);
+assert.equal(zoomIn.guides,null,
+  'Screen-space snap radius decreases in flow units when zoomed in');
+const zoomOut=snapNodePositionChanges(nodes,move(393,193),.5);
+assert.equal(zoomOut.changes[0].position.x,400);
+const group=[
+  node('fixed',400,200,300,200,false),
+  node('a',20,60,100,100),
+  node('b',160,90,100,100)
+];
+const multi=snapNodePositionChanges(group,[
+  {id:'a',type:'position',position:{x:157,y:180},dragging:true},
+  {id:'b',type:'position',position:{x:297,y:210},dragging:true}
+],1);
+assert.equal(multi.changes[0].position.x,160);
+assert.equal(multi.changes[1].position.x,300,
+  'Dragging a selected group applies one common snap offset');
+assert.equal(multi.changes[1].position.y-multi.changes[0].position.y,30,
+  'Group snapping preserves the distance between selected nodes');
+assert.equal(snapNodePositionChanges([nodes[1]],move(393,193),1).guides,null,
+  'Dragging the only node cannot create a guide');
 
 const valid=(source,target,edges)=>{
   if(source===target)return false;
@@ -61,4 +70,4 @@ assert.deepEqual(planGroupConnections(['a','b','c','b'],'video',existing,valid)
 assert.deepEqual(planGroupConnections(['a','b'],'b',[],valid)
   .map(edge=>edge.source),['a'],'Self connections are blocked');
 assert.equal(planGroupConnections(['a','a'],'video',[],valid).length,1);
-console.log('PASS: 8 group alignment/distribution modes; mixed dimensions; fan-out validation and duplicate protection');
+console.log('PASS: Photoshop-style snap guides (edges, centers, zoom, group movement) and safe fan-out connections');

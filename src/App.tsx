@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, DragEvent, KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, ConnectionLineType,
-  SelectionMode, addEdge, useEdgesState, useNodesState, useReactFlow
+  SelectionMode, ViewportPortal, addEdge, useEdgesState, useNodesState, useReactFlow
 } from '@xyflow/react';
 import type { Connection, Edge, NodeChange } from '@xyflow/react';
 import {
@@ -19,8 +19,9 @@ import { ConnectionHighlightContext,ConnectionInvalidContext,FlowTargetContext,N
 import type { ConnectionHighlight,NodeEditorState } from './StudioNodeV2';
 import {FlowEdge} from './FlowEdge';
 import {SelectionGroupControls} from './SelectionGroupControls';
-import {alignSelectedNodes,planGroupConnections} from './node-alignment.mjs';
-import type {AlignmentMode} from './node-alignment.mjs';
+import {planGroupConnections} from './node-alignment.mjs';
+import {snapNodePositionChanges} from './node-smart-guides.mjs';
+import type {SmartGuides} from './node-smart-guides.mjs';
 import { demoImages, defaultVideoModel, kindLabels, models, newData, normalizeVideoNodes, sampleAdCanvas, sampleCanvas, supportedDoubaoVideoModels } from './sample';
 import { referencesForNode, resolveReferences, reorderReferenceNodes } from './doubao';
 import type { DoubaoAccount, DoubaoJob } from './doubao';
@@ -118,6 +119,8 @@ function Workspace() {
   const [museQuotaError,setMuseQuotaError]=useState('');
   const [connectionHighlight, setConnectionHighlight] = useState<ConnectionHighlight | null>(null);
   const [draggingNodeId,setDraggingNodeId]=useState<string|null>(null);
+  const [smartGuides,setSmartGuides]=useState<SmartGuides>(null);
+  const nodeDragActive=useRef(false);
   const [cutMode,setCutMode]=useState(false);
   const [cutHoverEdge,setCutHoverEdge]=useState<string|null>(null);
   const cutModeRef=useRef(false);
@@ -720,13 +723,21 @@ function Workspace() {
     setEdges(prev => canConnect(connection.source,connection.target,prev)
       ? addEdge({...connection,...edgeDefaults,id:uid()},prev) : prev);
   },[snapshot,setEdges]);
-  const alignGroup=useCallback((mode:AlignmentMode)=>{
-    const current=nodesRef.current;
-    const aligned=alignSelectedNodes(current,mode);
-    if(!aligned.some((node,index)=>node!==current[index]))return;
-    snapshot();
-    setNodes(aligned);
-  },[snapshot,setNodes]);
+  const changeCanvasNodes=useCallback((changes:NodeChange<StudioNode>[])=>{
+    if(!nodeDragActive.current){
+      onNodesChange(changes);
+      return;
+    }
+    const snapped=snapNodePositionChanges(
+      nodesRef.current,changes,rf.getZoom()
+    );
+    setSmartGuides(prev=>{
+      const next=snapped.guides;
+      if(JSON.stringify(prev)===JSON.stringify(next))return prev;
+      return next;
+    });
+    onNodesChange(snapped.changes);
+  },[onNodesChange,rf]);
   const groupTargets=useCallback((ids:string[],targetId:string)=>{
     const validIds=ids.filter(id=>nodesRef.current.some(n=>n.id===id));
     const planned=planGroupConnections(validIds,targetId,edgesRef.current,canConnect);
@@ -850,11 +861,17 @@ function Workspace() {
   const handleNodeDragStart=useCallback((
     _event:MouseEvent|TouchEvent,node:StudioNode
   )=>{
+    nodeDragActive.current=true;
+    setSmartGuides(null);
     setDraggingNodeId(node.id);
     setEditorState({id:null,instant:true});
     snapshot();
   },[snapshot]);
-  const handleNodeDragStop=useCallback(()=>setDraggingNodeId(null),[]);
+  const handleNodeDragStop=useCallback(()=>{
+    nodeDragActive.current=false;
+    setSmartGuides(null);
+    setDraggingNodeId(null);
+  },[]);
   const handleSelectionStart=useCallback(()=>setEditorState({id:null,instant:true}),[]);
   const handlePaneClick=useCallback(()=>{
     setEditorState({id:null,instant:false});
@@ -1062,7 +1079,8 @@ function Workspace() {
       const f=e.target.files?.[0];if(f)void importJSON(f);e.target.value='';
     }}/>
     <div className="work-area">
-      <div className={'canvas-container'+(cutMode?' tn-cut-mode':'')} onDoubleClickCapture={onCanvasDoubleClick}
+      <div className={'canvas-container'+(cutMode?' tn-cut-mode':'')+(selectedSourceIds.size>1?' tn-multi-selection':'')}
+        onDoubleClickCapture={onCanvasDoubleClick}
         onDragOver={onDragOver} onDrop={onDrop}
         onContextMenu={e=>{e.preventDefault();setShowAdd(false);setMenuOrigin(null);setMenuSearch('');}}>
         <StudioActionsContext.Provider value={actions}>
@@ -1072,7 +1090,7 @@ function Workspace() {
           <NodeEditorContext.Provider value={editorState}>
           <ReactFlow
             nodes={nodes} edges={renderedEdges}
-            nodeTypes={nodeTypes} edgeTypes={edgeTypes} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect}
+            nodeTypes={nodeTypes} edgeTypes={edgeTypes} onNodesChange={changeCanvasNodes} onEdgesChange={onEdgesChange} onConnect={onConnect}
             isValidConnection={validConnection}
             onConnectStart={onConnectStart}
             onConnectEnd={onConnectEnd}
@@ -1095,8 +1113,22 @@ function Workspace() {
           ><Background color="#55565a" gap={23} size={1.3} variant={BackgroundVariant.Dots}/>
           {nodes.filter(node=>node.selected).length>=2&&
             <SelectionGroupControls nodes={nodes} zoom={zoom}
-              onAlign={alignGroup} onConnect={groupTargets} onAdd={groupAdd}
+              onConnect={groupTargets} onAdd={groupAdd}
               onStart={groupDragStart} onHover={groupDragHover} onEnd={groupDragEnd}/>}
+          {smartGuides&&<ViewportPortal>
+            {smartGuides.vertical&&<div className="tn-smart-guide tn-smart-guide-vertical"
+              data-testid="smart-guide-vertical" style={{
+                left:smartGuides.vertical.x,top:smartGuides.vertical.y1,
+                height:smartGuides.vertical.y2-smartGuides.vertical.y1,
+                width:1/Math.max(.1,zoom)
+              }}/>}
+            {smartGuides.horizontal&&<div className="tn-smart-guide tn-smart-guide-horizontal"
+              data-testid="smart-guide-horizontal" style={{
+                left:smartGuides.horizontal.x1,top:smartGuides.horizontal.y,
+                width:smartGuides.horizontal.x2-smartGuides.horizontal.x1,
+                height:1/Math.max(.1,zoom)
+              }}/>}
+          </ViewportPortal>}
           {showMinimap&&<MiniMap className="studio-minimap" pannable zoomable position="bottom-right" nodeStrokeWidth={2} nodeColor="#555967" maskColor="#0d0e13aa"/>}
           </ReactFlow>
           </NodeEditorContext.Provider>
