@@ -475,6 +475,47 @@ function Workspace() {
       notify('已导入素材：'+asset.name);
     } catch(e) {notify('导入失败：'+(e as Error).message);}
   },[update,notify]);
+  const extractingFrameIds=useRef(new Set<string>());
+  const extractLastFrame=useCallback(async(id:string)=>{
+    if(extractingFrameIds.current.has(id))return;
+    const source=nodesRef.current.find(n=>n.id===id);
+    if(!source||source.data.kind!=='video'||source.data.demo||
+       !/^\/api\/uploads\/[^?#]+\.(?:mp4|mov|webm|ogg|m4v)$/i.test(source.data.mediaUrl||'')){
+      notify('请先生成或上传本地视频');
+      return;
+    }
+    extractingFrameIds.current.add(id);
+    try{
+      notify('正在提取视频最后一帧…');
+      const result=await request<{
+        url:string;name:string;width:number;height:number
+      }>('/api/videos/extract-last-frame',JSONBody({mediaUrl:source.data.mediaUrl}));
+      const current=nodesRef.current.find(n=>n.id===id);
+      if(!current||current.data.mediaUrl!==source.data.mediaUrl){
+        notify('视频节点已发生变化，尾帧图片已保存至本地素材目录');
+        return;
+      }
+      const point={
+        x:current.position.x+Math.max(current.measured?.width||0,550)+125,
+        y:current.position.y+25
+      };
+      const imageId=addNode('image',point,{
+        title:(current.data.title||'视频')+' · 尾帧',
+        mediaUrl:result.url,mediaName:result.name,
+        mediaWidth:result.width,mediaHeight:result.height,
+        prompt:'',status:'done',progress:100,demo:false
+      });
+      setEdges(prev=>canConnect(id,imageId,prev)
+        ?addEdge({...edgeDefaults,id:uid(),source:id,target:imageId,
+          sourceHandle:'out',targetHandle:'in'},prev):prev);
+      revealNewNode(point,'image');
+      notify('尾帧提取成功，已添加图片节点并连接原视频');
+    }catch(error){
+      notify('尾帧提取失败：'+(error as Error).message);
+    }finally{
+      extractingFrameIds.current.delete(id);
+    }
+  },[addNode,setEdges,revealNewNode,notify]);
   const uploadFiles = useCallback(async(files:FileList|File[],point?:{x:number;y:number})=>{
     const list=Array.from(files);
     for(let i=0;i<list.length;i++){
@@ -732,13 +773,13 @@ function Workspace() {
     setPanel('inspector');
   },[setNodes]);
   const actions=useMemo(()=>({
-    update,generate,addAfter,addBefore,uploadFor,duplicate,remove,expand,inspect,
+    update,generate,addAfter,addBefore,uploadFor,extractLastFrame,duplicate,remove,expand,inspect,
     openNodeMenu:(id:string,side:'source'|'target',x:number,y:number)=>openNodeMenu(id,side,x,y),
     accounts:doubaoAccounts,museAccounts,referencesFor,reorderReferences,
     openAccountsSettings:()=>setPanel('doubao'),
     openMuseAccountsSettings:()=>setPanel('muse'),
     openAccountBrowser,openMuseAccountBrowser
-  }),[update,generate,addAfter,addBefore,openNodeMenu,uploadFor,duplicate,remove,
+  }),[update,generate,addAfter,addBefore,openNodeMenu,uploadFor,extractLastFrame,duplicate,remove,
     expand,inspect,doubaoAccounts,museAccounts,referencesFor,reorderReferences,
     openAccountBrowser,openMuseAccountBrowser]);
   const selected=nodes.find(n=>n.selected) || null;

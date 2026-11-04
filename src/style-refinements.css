@@ -136,6 +136,11 @@
   background:#fa58b7;
   box-shadow:0 0 3px #ff73cb9c;
 }
+.tn-node .tn-upload-chip.tn-tail-frame-chip{left:0;right:auto}
+.tn-node.tn-selected .tn-upload-chip.tn-tail-frame-chip{
+  left:10px;right:auto;top:37px;z-index:18
+}
+.tn-tail-frame-chip:disabled{cursor:progress;opacity:.7!important}
 .tn-node-frame{transition-duration:.3s}
 .tn-toolbar{animation-duration:.36s}
 .tn-toolbar .tn-toolbar-download{

@@ -7,7 +7,7 @@ import {
   Image as ImageIcon, Video, AlignLeft, AudioLines, Upload, Plus, Tag, Copy,
   FolderPlus, Maximize2, ChevronDown, ArrowUp, Sparkles, Check,
   Play, MoreHorizontal, Trash2, X, Settings2, RotateCw, WandSparkles,
-  CircleHelp, MousePointer2, LogIn, Gem, Volume2, Download, Pencil
+  CircleHelp, MousePointer2, LogIn, Gem, Volume2, Download, Pencil, ImagePlus
 } from 'lucide-react';
 import { StudioActionsContext } from './nodes';
 import type { Kind, StudioNode } from './types';
@@ -164,6 +164,7 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
   const textComposing=useRef(false);
   const [menu, setMenu] = useState(false);
   const [showModel, setShowModel] = useState(false);
+  const [extractingTailFrame,setExtractingTailFrame]=useState(false);
   const [modelMounted,setModelMounted]=useState(false);
   const [modelClosing,setModelClosing]=useState(false);
   const [showDuration, setShowDuration] = useState(false);
@@ -283,6 +284,12 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
   const downstream = kind === 'text' ? 'image' : kind === 'image' ? 'video' : 'image';
   const isVideo = kind === 'video' && !!data.mediaUrl && !data.demo &&
     /\.(mp4|mov|webm|ogg)(\?|$)/i.test(data.mediaUrl);
+  const extractTailFrame=async()=>{
+    if(extractingTailFrame)return;
+    setExtractingTailFrame(true);
+    try{await api.extractLastFrame(id);}
+    finally{setExtractingTailFrame(false);}
+  };
   const downloadFilename=(()=>{
     const extension=data.mediaUrl?.match(/\.([a-z\d]{2,5})(?:\?|$)/i)?.[1]
       ||(kind==='video'?'mp4':'png');
@@ -426,6 +433,12 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
     </div>
     {(kind==='image'||kind==='video'||kind==='audio') &&
       <button className="tn-upload-chip nodrag" title="上传素材" onClick={()=>inputRef.current?.click()}><Upload size={14}/> 上传</button>}
+    {isVideo&&<button className="tn-upload-chip tn-tail-frame-chip nodrag"
+      type="button" title="一键提取视频尾帧到画布"
+      aria-label="一键提取视频尾帧到画布" disabled={extractingTailFrame}
+      onClick={event=>{event.stopPropagation();void extractTailFrame();}}>
+      <ImagePlus size={14}/>{extractingTailFrame?'提取中…':'提取尾帧'}
+    </button>}
     <input hidden ref={inputRef} type="file" accept={fileAccept} onChange={e=>{
       const file=e.currentTarget.files?.[0]; if(file)void api.uploadFor(id,file);e.currentTarget.value='';
     }}/>
@@ -447,6 +460,16 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
         <button title="放大" onClick={()=>api.expand(id)}><Maximize2 size={16}/></button>
         <button title="节点设置" onClick={()=>api.inspect(id)}><Settings2 size={16}/></button>
         <button title="删除节点" onClick={()=>api.remove(id)}><Trash2 size={16}/></button>
+        {isVideo&&<button type="button"
+          title={extractingTailFrame?'正在提取视频尾帧':'提取视频尾帧（工具栏）'}
+          aria-label="提取视频尾帧（工具栏）"
+          disabled={extractingTailFrame}
+          onClick={async event=>{
+            event.stopPropagation();
+            await extractTailFrame();
+          }}>
+          <ImagePlus size={17}/>
+        </button>}
         {(kind==='image'||kind==='video'||kind==='audio')&&data.mediaUrl&&
           <a className="tn-toolbar-download nodrag" href={data.mediaUrl}
             title="下载生成素材" aria-label="下载生成素材"
