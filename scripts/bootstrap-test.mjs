@@ -3,7 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {bootstrap,ensureDependencies,syncGit} from './bootstrap-core.mjs';
+import {
+  bootstrap,dependencyFingerprint,ensureDependencies,syncGit
+} from './bootstrap-core.mjs';
 
 const temp=fs.mkdtempSync(path.join(os.tmpdir(),'tapnow-github-update-'));
 const bare=path.join(temp,'remote.git');
@@ -87,6 +89,72 @@ try{
     'node_modules/vite/bin/vite.js'),'utf8'),'installed dependency v2',
   'Installation failure must restore existing downloaded libraries');
 
+  // Interrupted update: the old dependencies were moved to backup, and
+  // npm was interrupted before a new node_modules was fully installed.
+  const interrupted=path.join(temp,'interrupted');
+  fs.mkdirSync(interrupted);
+  write(interrupted,'package-lock.json','{"name":"old-client","lockfileVersion":3}');
+  write(interrupted,'node_modules.tapnow-backup/vite/bin/vite.js','old vite');
+  write(interrupted,'node_modules.tapnow-backup/.tapnow-install.sha256',
+    dependencyFingerprint(interrupted)+'\n');
+  write(interrupted,'server/data/account.json','KEEP_PRIVATE_ACCOUNT_DATA');
+  assert.equal(ensureDependencies({
+    root:interrupted,install:()=>{throw Error('must not reinstall')},log:quiet
+  }).installed,false);
+  assert.equal(fs.readFileSync(path.join(interrupted,
+    'node_modules/vite/bin/vite.js'),'utf8'),'old vite');
+  assert.ok(!fs.existsSync(path.join(interrupted,'node_modules.tapnow-backup')));
+  assert.equal(fs.readFileSync(path.join(interrupted,
+    'server/data/account.json'),'utf8'),'KEEP_PRIVATE_ACCOUNT_DATA');
+
+  // A failed npm ci may leave partial new files and a valid old backup.
+  // Restore the old install, retain the partial directory for inspection.
+  const partial=path.join(temp,'partial');
+  fs.mkdirSync(partial);
+  write(partial,'package-lock.json','{"name":"partial","lockfileVersion":3}');
+  write(partial,'node_modules/some-package/partial.js','PARTIAL_DATA');
+  write(partial,'node_modules.tapnow-backup/vite/bin/vite.js','old vite');
+  write(partial,'node_modules.tapnow-backup/.tapnow-install.sha256',
+    dependencyFingerprint(partial)+'\n');
+  assert.equal(ensureDependencies({
+    root:partial,install:()=>{throw Error('must not reinstall')},log:quiet
+  }).installed,false);
+  assert.equal(fs.readFileSync(path.join(partial,
+    'node_modules/vite/bin/vite.js'),'utf8'),'old vite');
+  const preservedPartial=fs.readdirSync(partial)
+    .filter(name=>name.startsWith('node_modules.tapnow-incomplete-'));
+  assert.equal(preservedPartial.length,1);
+  assert.equal(fs.readFileSync(path.join(partial,
+    preservedPartial[0],'some-package/partial.js'),'utf8'),'PARTIAL_DATA');
+
+  // If the current install is already complete, do not overwrite it with
+  // a leftover old backup. Preserve the backup under another unique name.
+  const completed=path.join(temp,'completed');
+  fs.mkdirSync(completed);
+  write(completed,'package-lock.json','{"name":"completed","lockfileVersion":3}');
+  write(completed,'node_modules/vite/bin/vite.js','new vite');
+  write(completed,'node_modules/.tapnow-install.sha256',
+    dependencyFingerprint(completed)+'\n');
+  write(completed,'node_modules.tapnow-backup/vite/bin/vite.js','old vite');
+  assert.equal(ensureDependencies({
+    root:completed,install:()=>{throw Error('must not reinstall')},log:quiet
+  }).installed,false);
+  assert.equal(fs.readFileSync(path.join(completed,
+    'node_modules/vite/bin/vite.js'),'utf8'),'new vite');
+  assert.equal(fs.readdirSync(completed)
+    .filter(name=>name.startsWith('node_modules.tapnow-preserved-')).length,1);
+
+  // Missing/broken old and current libraries still fail closed, without
+  // deleting either directory or any user-owned files.
+  const broken=path.join(temp,'broken');
+  fs.mkdirSync(broken);
+  write(broken,'package-lock.json','{"name":"broken","lockfileVersion":3}');
+  write(broken,'node_modules.tapnow-backup/keep.txt','DO_NOT_DELETE');
+  assert.throws(()=>ensureDependencies({root:broken,log:quiet}),
+    /不完整的依赖备份/);
+  assert.equal(fs.readFileSync(path.join(broken,
+    'node_modules.tapnow-backup/keep.txt'),'utf8'),'DO_NOT_DELETE');
+
   // When new source has an un-installable dependency, restore the original
   // commit without erasing ignored account data.
   call(local,['checkout','--','changed.txt']);
@@ -103,7 +171,25 @@ try{
     'Failed dependency update must roll back the source commit');
   assert.equal(fs.readFileSync(path.join(local,'server/data/private.json'),'utf8'),
     'PRIVATE_LOCAL_DATA_STAYS');
-  console.log('PASS: Git fetch updates only changed tracked files; user data and dirty files survive; npm lock changes install once; failures roll back');
+
+  // If a previous version has a complete installed library set, a failed
+  // update must roll back and launch that version rather than leaving the
+  // user unable to start the application.
+  write(local,'node_modules/vite/bin/vite.js','working old client');
+  write(local,'node_modules/.tapnow-install.sha256',
+    dependencyFingerprint(local)+'\n');
+  const fallback=bootstrap({
+    root:local,log:quiet,install:()=>{throw Error('npm network temporarily offline')}
+  });
+  assert.equal(fallback.updated.skipped,'dependency-rollback');
+  assert.equal(fallback.dependencies.usingPrevious,true);
+  assert.equal(call(local,['rev-parse','HEAD']),oldHead);
+  assert.equal(fs.readFileSync(path.join(local,
+    'node_modules/vite/bin/vite.js'),'utf8'),'working old client');
+  assert.equal(fs.readFileSync(path.join(local,'server/data/private.json'),'utf8'),
+    'PRIVATE_LOCAL_DATA_STAYS','Offline fallback must not modify account data');
+
+  console.log('PASS: updater preserves project data, handles interrupted/partial/stale dependency backups, restores old libraries, and rolls back failed updates');
 }finally{
   fs.rmSync(temp,{recursive:true,force:true,maxRetries:4,retryDelay:100});
 }

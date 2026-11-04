@@ -73,6 +73,60 @@ export function dependencyFingerprint(root){
   return [sum,process.platform,process.arch,process.versions.node.split('.')[0]].join(':');
 }
 
+function previousDependenciesReady(root){
+  const modules=path.join(root,'node_modules');
+  const vite=path.join(modules,'vite','bin','vite.js');
+  const marker=path.join(modules,'.tapnow-install.sha256');
+  return fs.existsSync(vite)&&fs.existsSync(marker)&&
+    fs.readFileSync(marker,'utf8').trim()===dependencyFingerprint(root);
+}
+
+// If npm or the launcher was interrupted after atomically moving
+// node_modules -> node_modules.tapnow-backup, restore the previous installed
+// dependencies before another install attempt. Keep any partially installed
+// directory under a unique name so no existing files are overwritten.
+function recoverInterruptedDependencies({root,modules,backup,log}){
+  if(!fs.existsSync(backup))return;
+  const viable=dir=>fs.existsSync(path.join(dir,'vite','bin','vite.js'));
+  const marked=dir=>viable(dir)&&
+    fs.existsSync(path.join(dir,'.tapnow-install.sha256'));
+  const hasModules=fs.existsSync(modules);
+  if(!viable(backup)&&(!hasModules||!viable(modules)))
+    throw new Error('检测到不完整的依赖备份：'+backup+
+      '；保留全部目录，需手动检查 node_modules 与备份内容');
+
+  if(!hasModules){
+    fs.renameSync(backup,modules);
+    log('[TapNow Update] 检测到上次安装中断，已将旧依赖备份恢复为 node_modules');
+    return;
+  }
+
+  // A completed current install takes priority. The old backup is renamed,
+  // never deleted, and will not block a future dependency update.
+  const keepCurrent=marked(modules)||!viable(backup);
+  const preserved=path.join(root,
+    'node_modules.tapnow-preserved-'+Date.now()+'-'+
+    crypto.randomBytes(4).toString('hex'));
+  if(keepCurrent){
+    fs.renameSync(backup,preserved);
+    log('[TapNow Update] 已保留上次残留的依赖备份：'+preserved);
+    return;
+  }
+
+  const partial=path.join(root,
+    'node_modules.tapnow-incomplete-'+Date.now()+'-'+
+    crypto.randomBytes(4).toString('hex'));
+  fs.renameSync(modules,partial);
+  try{
+    fs.renameSync(backup,modules);
+  }catch(error){
+    // Restore the pre-recovery state when the second rename fails.
+    fs.renameSync(partial,modules);
+    throw error;
+  }
+  log('[TapNow Update] 已恢复上次安装中断前的依赖；保留未完成安装目录：'+partial);
+}
+
 function installNpm(root){
   const windows=process.platform==='win32';
   const executable=windows?(process.env.ComSpec||'cmd.exe'):'npm';
@@ -93,14 +147,14 @@ export function ensureDependencies({
   const vite=path.join(modules,'vite','bin','vite.js');
   const marker=path.join(modules,'.tapnow-install.sha256');
   const fingerprint=dependencyFingerprint(root);
+  recoverInterruptedDependencies({root,modules,backup,log});
   if(fs.existsSync(vite)&&fs.existsSync(marker)&&
     fs.readFileSync(marker,'utf8').trim()===fingerprint){
     log('[TapNow Update] 依赖未变化，无需重新下载');
     return {installed:false};
   }
   if(fs.existsSync(backup))
-    throw new Error('检测到未清理的依赖备份：'+backup+
-      '；为避免覆盖已有数据，已停止安装');
+    throw new Error('无法自动恢复残留的依赖备份：'+backup);
   log('[TapNow Update] 首次安装或依赖清单变化，按 package-lock.json 安装 npm 库');
   let saved=false;
   if(fs.existsSync(modules)){
@@ -134,6 +188,15 @@ export function bootstrap({root,runGit=git,install=installNpm,log=console.log}){
       const rollback=runGit(root,['reset','--hard',updated.oldHead]);
       log('[TapNow Update] 依赖失败，源码回滚'+
         (rollback.ok?'完成':'失败，请手动检查：'+rollback.error));
+      // If old dependencies were restored by ensureDependencies and match
+      // the old lockfile after Git rollback, the existing local version can
+      // still run even when the new update cannot install offline.
+      if(rollback.ok&&previousDependenciesReady(root)){
+        log('[TapNow Update] 新版本依赖安装失败：'+err.message);
+        log('[TapNow Update] 旧依赖完整，继续启动上次可用版本；账号和生成文件保持不变');
+        return {updated:{updated:false,skipped:'dependency-rollback'},
+          dependencies:{installed:false,usingPrevious:true}};
+      }
     }
     throw err;
   }
