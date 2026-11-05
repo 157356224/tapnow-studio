@@ -1,8 +1,14 @@
 import type { StudioEdge, StudioNode, StudioNodeData } from './types';
 
+export const h3VideoModels=['h3-video','h3-video-flex','h3-video-frames'] as const;
+export const h3VideoModelOptions=[
+  {name:'h3-video',resolution:'480–1080P',duration:'4–30S',audio:true},
+  {name:'h3-video-flex',resolution:'480–1080P',duration:'4–15S',audio:true},
+  {name:'h3-video-frames',resolution:'480–1080P',duration:'4–15S',audio:true}
+] as const;
 export const models = {
   image: ['Seedream 5.0 Lite', 'Banana Pro', 'GPT Image', 'Seedream 5.0', 'FLUX.2', 'Imagen 4'],
-  video: ['Seedance 2.0 Mini', 'Seedance 2.0 Fast'],
+  video: ['Seedance 2.0 Mini', 'Seedance 2.0 Fast',...h3VideoModels],
   text: ['Gemini 3.1 Flash Lite', 'Text Editor'],
   audio: ['Music / Voice', 'ElevenLabs', 'MiniMax Audio']
 };
@@ -12,8 +18,15 @@ export function normalizeVideoNodes(nodes:StudioNode[]):StudioNode[]{
   return nodes.map(node=>{
     if(node.data.kind==='image'&&node.data.provider==='demo')
       return {...node,data:{...node.data,provider:'muse'}};
-    if(node.data.kind==='video'&&!models.video.includes(node.data.model||''))
-      return {...node,data:{...node.data,model:defaultVideoModel}};
+    if(node.data.kind==='video'){
+      const wantsH3=node.data.provider==='h3';
+      const valid=wantsH3
+        ?h3VideoModels.some(model=>model===node.data.model)
+        :supportedDoubaoVideoModels.some(model=>model===node.data.model);
+      if(!valid&&node.data.provider!=='muse')
+        return {...node,data:{...node.data,model:wantsH3?'h3-video':defaultVideoModel,
+          ...(wantsH3?{resolution:node.data.resolution||'768p',duration:'6s'}:{})}};
+    }
     return node;
   });
 }

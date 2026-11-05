@@ -22,12 +22,13 @@ import {SelectionGroupControls} from './SelectionGroupControls';
 import {planGroupConnections} from './node-alignment.mjs';
 import {snapNodePositionChanges} from './node-smart-guides.mjs';
 import type {SmartGuides} from './node-smart-guides.mjs';
-import { demoImages, defaultVideoModel, kindLabels, models, newData, normalizeVideoNodes, sampleAdCanvas, sampleCanvas, supportedDoubaoVideoModels } from './sample';
+import { demoImages, defaultVideoModel, h3VideoModels, kindLabels, models, newData, normalizeVideoNodes, sampleAdCanvas, sampleCanvas, supportedDoubaoVideoModels } from './sample';
 import { referencesForNode, resolveReferences, reorderReferenceNodes } from './doubao';
 import type { DoubaoAccount, DoubaoJob } from './doubao';
 import { AccountsPanel } from './AccountsPanel';
 import {MuseAccountsPanel} from './MuseAccountsPanel';
 import {MuseQuotaButton} from './MuseQuotaButton';
+import {H3SettingsPanel} from './H3SettingsPanel';
 import type {MuseAccount,MuseJob,MuseQuotaSummary} from './muse';
 import type { Kind, Project, ProjectSummary, StudioEdge, StudioNode, StudioNodeData } from './types';
 
@@ -45,7 +46,9 @@ const entryTools: { kind: Kind; label: string; desc: string; icon: typeof ImageI
 ];
 const uid = () => crypto.randomUUID();
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-type Panel = 'agent' | 'projects' | 'assets' | 'inspector' | 'doubao' | 'muse' | null;
+type Panel = 'agent' | 'projects' | 'assets' | 'inspector' | 'doubao' | 'muse' | 'h3' | null;
+type H3Job={id:string;status:'queued'|'starting'|'running'|'completed'|'failed'|'interrupted';
+  progress:number;message:string;videoUrl?:string;};
 type NodeMenuOrigin = {id:string;side:'source'|'target';dropped:boolean;ids?:string[]};
 type History = { nodes: StudioNode[]; edges: StudioEdge[] };
 type Plan = { valid: boolean; steps?: {id: string; kind: Kind}[]; skipped?: string[]; error?: string };
@@ -559,6 +562,75 @@ function Workspace() {
     if(generatingNodeIds.current.has(id))return;
     generatingNodeIds.current.add(id);
     try{
+    if(source.data.kind==='video'&&kind==='video'&&source.data.provider==='h3'){
+      if(!projectId){notify('请先保存画布');return;}
+      if(!h3VideoModels.some(model=>model===source.data.model)){
+        notify('请选择 H3 Video、H3 Video Flex 或 H3 Frames');return;
+      }
+      let h3References:ReturnType<typeof resolveReferences>=[];
+      if(source.data.model==='h3-video-frames'){
+        if(!source.data.h3FirstFrameId&&!source.data.h3LastFrameId){
+          notify('H3 Frames 请先连接图片，并在设置里选择首帧或尾帧');return;
+        }
+      }else{
+        try{
+          h3References=resolveReferences(source.data.prompt||'',
+            source.data.referenceIds||[],referencesFor(id));
+        }catch(error){notify((error as Error).message);return;}
+      }
+      try{
+        const config=await request<{configured:boolean}>('/api/h3/config');
+        if(!config.configured){
+          setPanel('h3');
+          notify('先在 H3 API 设置中填写元铂AI API Key');
+          return;
+        }
+        if(timer.current)clearTimeout(timer.current);
+        const staged=nodesRef.current.map(node=>node.id===id
+          ?{...node,data:{...node.data,status:'queued' as const,
+            progress:0,jobMessage:'H3 正在准备提交'}}
+          :node);
+        nodesRef.current=staged;setNodes(staged);
+        setSaveStatus('正在保存…');
+        const saved=await saveProjectSnapshot(projectId,{
+          title,nodes:staged,edges:edgesRef.current,viewport:viewport.current
+        });
+        setSaveStatus('已保存到本地');
+        setProjects(ps=>ps.map(p=>p.id===projectId
+          ?{...p,updatedAt:saved.updatedAt}:p));
+        const job=await request<H3Job>('/api/h3/jobs',JSONBody({
+          projectId,nodeId:id,model:source.data.model,
+          prompt:source.data.prompt,duration:source.data.duration||'6s',
+          resolution:source.data.resolution||'768p',
+          ratio:source.data.ratio||'16:9',
+          references:h3References.map(ref=>({id:ref.id}))
+        }));
+        update(id,{jobId:job.id,status:'queued',progress:0,jobMessage:job.message});
+        for(let attempt=0;attempt<1200;attempt++){
+          await pause(3500);
+          const status=await request<H3Job>('/api/h3/jobs/'+job.id);
+          if(!nodesRef.current.some(node=>node.id===id))return;
+          if(status.status==='completed'&&status.videoUrl){
+            update(id,{status:'done',progress:100,jobMessage:status.message,
+              mediaUrl:status.videoUrl,demo:false});
+            notify('H3 视频已保存到当前画布');
+            return;
+          }
+          if(['failed','interrupted'].includes(status.status)){
+            update(id,{status:'error',progress:0,jobMessage:status.message});
+            notify('H3 任务未完成：'+status.message);
+            return;
+          }
+          update(id,{status:['queued','starting'].includes(status.status)?'queued':'running',
+            progress:status.progress||0,jobMessage:status.message});
+        }
+        update(id,{status:'error',jobMessage:'H3 等待结果超时，请检查元铂AI后台'});
+      }catch(error){
+        update(id,{status:'error',progress:0,jobMessage:(error as Error).message});
+        notify('H3 生成失败：'+(error as Error).message);
+      }
+      return;
+    }
     const museMode=(source.data.kind==='image'&&kind==='image')||
       (source.data.kind==='video'&&kind==='video'&&source.data.provider==='muse');
     if(museMode){
@@ -778,6 +850,7 @@ function Workspace() {
     accounts:doubaoAccounts,museAccounts,referencesFor,reorderReferences,
     openAccountsSettings:()=>setPanel('doubao'),
     openMuseAccountsSettings:()=>setPanel('muse'),
+    openH3Settings:()=>setPanel('h3'),
     openAccountBrowser,openMuseAccountBrowser
   }),[update,generate,addAfter,addBefore,openNodeMenu,uploadFor,extractLastFrame,duplicate,remove,
     expand,inspect,doubaoAccounts,museAccounts,referencesFor,reorderReferences,
@@ -1139,6 +1212,11 @@ function Workspace() {
           onClick={()=>setPanel(panel==='muse'?null:'muse')}>
           <Shield size={15}/><span>Muse 账号</span>
         </button>
+        <button className="tn-muse-account-link" aria-label="H3 API 设置"
+          title="元铂AI H3 API Key"
+          onClick={()=>setPanel(panel==='h3'?null:'h3')}>
+          <Sparkles size={15}/><span>H3 API</span>
+        </button>
         <button title="工作流模板" onClick={()=>setShowTemplates(true)}><LayoutGrid size={16}/></button>
       </div>
     </div>
@@ -1262,6 +1340,7 @@ function Workspace() {
           onClose={()=>setPanel(null)} onSwitch={setPanel}/>}
         {panel==='muse'&&<MuseAccountsPanel accounts={museAccounts}
           refresh={refreshMuseAccounts} onClose={()=>setPanel(null)} onSwitch={setPanel}/>}
+        {panel==='h3'&&<H3SettingsPanel onClose={()=>setPanel(null)}/>}
         {panel==='agent' && <>
           <div className="panel-topline"><span className="panel-icon"><Sparkles size={18}/></span><strong>AI Creative Agent</strong><span className="demo-small">DEMO</span><button onClick={()=>setPanel(null)}><X size={17}/></button></div>
           <div className="agent-body">
@@ -1315,21 +1394,27 @@ function Workspace() {
                   aria-label="节点生成服务"
                   value={selected.data.provider||'doubao'}
                   onChange={e=>{
-                    const provider=e.target.value as 'doubao'|'muse';
+                    const provider=e.target.value as 'doubao'|'muse'|'h3';
                     update(selected.id,{provider,
+                      ...(provider==='h3'?{
+                        model:'h3-video',duration:'6s',resolution:'768p'
+                      }:provider==='doubao'||provider==='muse'?{
+                        model:defaultVideoModel,duration:'5s',resolution:'720p'
+                      }:{}),
                       ...(provider==='muse'&&selected.data.kind==='video'&&
                         Number.parseInt(selected.data.duration||'5s',10)>10
                         ?{duration:'10s'}:{})});
                   }}>
                     <option value="doubao">豆包生成</option>
                     <option value="muse">Muse 生成</option>
+                    <option value="h3">元铂AI H3 API</option>
                 </select></label>}
-              {((selected.data.kind!=='video'&&selected.data.kind!=='image')||
-                selected.data.kind==='video'&&
-                  (selected.data.provider||'doubao')==='doubao')&&
+              {selected.data.kind==='video'&&selected.data.provider!=='muse'&&
                 <label>模型<select value={selected.data.model}
                   onChange={e=>update(selected.id,{model:e.target.value})}>
-                  {models[selected.data.kind].map(x=><option key={x}>{x}</option>)}
+                  {selected.data.provider==='h3'
+                    ?h3VideoModels.map(x=><option key={x}>{x}</option>)
+                    :supportedDoubaoVideoModels.map(x=><option key={x}>{x}</option>)}
                 </select></label>}
               <label>画幅比例<select value={selected.data.ratio} onChange={e=>update(selected.id,{ratio:e.target.value})}>{(selected.data.kind==='video'?['16:9','4:3','1:1','3:4','9:16','21:9']:['16:9','4:3','1:1','3:4','9:16','21:9','2:3']).map(x=><option key={x}>{x}</option>)}</select></label>
               {selected.data.kind==='image'&&
@@ -1339,9 +1424,44 @@ function Workspace() {
                 </select></label>}
               {selected.data.kind==='video'&&<label>时长<select value={selected.data.duration}
                 onChange={e=>update(selected.id,{duration:e.target.value})}>
-                {Array.from({length:selected.data.provider==='muse'?7:12},
+                {Array.from({length:selected.data.provider==='muse'?7:
+                  selected.data.provider==='h3'
+                    ?selected.data.model==='h3-video'?27:12:12},
                   (_,i)=>(i+4)+'s').map(x=><option key={x}>{x}</option>)}
               </select></label>}
+              {selected.data.kind==='video'&&selected.data.provider==='h3'&&<>
+                <label>H3 视频分辨率<select
+                  value={selected.data.resolution||'768p'}
+                  onChange={e=>update(selected.id,{resolution:e.target.value})}>
+                  {['480p','720p','768p','960p','1080p'].map(res=>
+                    <option value={res} key={res}>{res}</option>)}
+                </select></label>
+                {selected.data.model==='h3-video-frames'&&<>
+                  <label>H3 首帧<select value={selected.data.h3FirstFrameId||''}
+                    onChange={e=>update(selected.id,{h3FirstFrameId:e.target.value})}>
+                    <option value="">不使用首帧</option>
+                    {referencesFor(selected.id).filter(ref=>ref.kind==='image')
+                      .map(ref=><option value={ref.id} key={ref.id}>
+                        {ref.token} · {ref.title}
+                      </option>)}
+                  </select></label>
+                  <label>H3 尾帧<select value={selected.data.h3LastFrameId||''}
+                    onChange={e=>update(selected.id,{h3LastFrameId:e.target.value})}>
+                    <option value="">不使用尾帧</option>
+                    {referencesFor(selected.id).filter(ref=>ref.kind==='image')
+                      .map(ref=><option value={ref.id} key={ref.id}>
+                        {ref.token} · {ref.title}
+                      </option>)}
+                  </select></label>
+                </>}
+                <label className="check-label">
+                  <input type="checkbox" checked={!!selected.data.h3OptimizePrompt}
+                    onChange={e=>update(selected.id,{h3OptimizePrompt:e.target.checked})}/>
+                  H3 优化提示词（可能额外计费）
+                </label>
+                <button className="doubao-quick-settings"
+                  onClick={()=>setPanel('h3')}>配置元铂AI API Key</button>
+              </>}
               {selected.data.kind==='video'&&(selected.data.provider||'doubao')==='doubao'&&
                 <label>豆包浏览器账号
                 <select value={selected.data.accountId||''} onChange={e=>update(selected.id,{accountId:e.target.value})}>
@@ -1370,7 +1490,10 @@ function Workspace() {
               {(selected.data.provider||(selected.data.kind==='image'?'muse':'doubao'))==='muse'&&
                 ['image','video'].includes(selected.data.kind)
                 ?'发送到 Muse 生成'+(selected.data.kind==='video'?'视频':'图片')
-                :selected.data.kind==='video'?'发送到豆包生成视频':'生成演示结果'}
+                :selected.data.kind==='video'
+                  ?selected.data.provider==='h3'
+                    ?'使用元铂AI H3 生成视频':'发送到豆包生成视频'
+                  :'生成演示结果'}
             </button>}
             <button className="inspector-delete" onClick={()=>remove(selected.id)}><Trash2 size={15}/> 删除节点</button>
           </div>}

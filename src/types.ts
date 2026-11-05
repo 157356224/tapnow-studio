@@ -11,12 +11,15 @@ export type StudioNodeData = Record<string, unknown> & {
   mediaWidth?: number;
   mediaHeight?: number;
   model?: string;
-  provider?: 'doubao'|'muse'|'demo';
+  provider?: 'doubao'|'muse'|'h3'|'demo';
   museAccountId?: string;
   ratio?: string;
   resolution?: string;
   duration?: string;
   accountId?: string;
+  h3FirstFrameId?: string;
+  h3LastFrameId?: string;
+  h3OptimizePrompt?: boolean;
   referenceIds?: string[];
   /** Explicit ordering of incoming image node IDs, used for @图片N numbering. */
   referenceOrder?: string[];

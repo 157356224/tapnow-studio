@@ -9,6 +9,7 @@ import { preserveCompletedVideoMedia } from './doubao-project.mjs';
 import {mountMuseRoutes} from './muse.mjs';
 import {preserveMuseCompletedMedia} from './muse-project.mjs';
 import {extractVideoLastFrame} from './video-last-frame.mjs';
+import {mountH3Routes} from './yuanbo-h3.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.join(root, 'data');
@@ -150,6 +151,7 @@ app.post('/api/videos/extract-last-frame',async(req,res,next)=>{
 app.use('/api/uploads', express.static(uploadDir, { dotfiles: 'deny' }));
 mountDoubaoRoutes(app,read,write);
 mountMuseRoutes(app,read,write);
+mountH3Routes(app,read,write,{dataDir,uploadDir});
 function planWorkflow(nodes, edges) {
   const lookup = new Map(nodes.map(x => [x.id, x]));
   const indegree = new Map(nodes.map(x => [x.id, 0]));

@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { StudioActionsContext } from './nodes';
 import type { Kind, StudioNode } from './types';
-import { defaultVideoModel, models, videoModelOptions } from './sample';
+import { defaultVideoModel, h3VideoModelOptions, models, videoModelOptions } from './sample';
 import { VideoPromptEditor } from './VideoPromptEditor';
 import { ComposingTextarea } from './ComposingTextarea';
 import { GenerationVisualCanvas } from './GenerationVisualCanvas';
@@ -206,6 +206,7 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
   // Keep the same connected thumbnail and @ ordering UI in demo mode.
   const references=(kind==='video'||kind==='image')?api.referencesFor(id):[];
   const museMode=(kind==='video'||kind==='image')&&provider==='muse';
+  const h3Mode=kind==='video'&&provider==='h3';
   const account=museMode
     ?api.museAccounts.find(a=>a.id===data.museAccountId)
     :api.accounts.find(a=>a.id===data.accountId);
@@ -513,12 +514,18 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
           {kind==='video'&&<div className="tn-provider-switch"
             role="group" aria-label="生成服务">
             {[
-              {id:'doubao',label:'豆包生成'},{id:'muse',label:'Muse 生成'}
+              {id:'doubao',label:'豆包生成'},{id:'muse',label:'Muse 生成'},
+              {id:'h3',label:'H3 API'}
             ].map(item=><button key={item.id} type="button"
               className={provider===item.id?'active':''}
               aria-pressed={provider===item.id}
               onClick={()=>{
-                api.update(id,{provider:item.id as 'doubao'|'muse',
+                api.update(id,{provider:item.id as 'doubao'|'muse'|'h3',
+                  ...(item.id==='h3'?{
+                    model:'h3-video',duration:'6s',resolution:'768p'
+                  }:item.id==='doubao'||item.id==='muse'?{
+                    model:defaultVideoModel,duration:'5s',resolution:'720p'
+                  }:{}),
                   ...(item.id==='muse'&&kind==='video'&&Number.parseInt(data.duration||'5s',10)>10
                     ?{duration:'10s'}:{})});
                 setShowDuration(false);setShowModel(false);
@@ -528,7 +535,11 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
             role="group" aria-label="生成服务">
             <button type="button" className="active" aria-pressed="true">Muse 生图</button>
           </div>}
-          {(kind==='video'||museMode)&&<div className="tn-account-picker">
+          {h3Mode&&<div className="tn-account-picker tn-h3-account-entry">
+            <button type="button" title="配置元铂AI H3 API Key"
+              onClick={()=>api.openH3Settings()}><Settings2 size={14}/> H3 API Key</button>
+          </div>}
+          {(museMode||(kind==='video'&&provider==='doubao'))&&<div className="tn-account-picker">
             <select aria-label={museMode?'Muse 生成账号':'视频生成账号'}
               title={museMode?'Muse 独立浏览器账号':'豆包独立浏览器账号'}
               value={museMode?(data.museAccountId||'auto'):(data.accountId||'')}
@@ -561,7 +572,7 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
               <div className={'tn-dropdown tn-video-model-menu'+(modelClosing?' tn-settings-closing':'')}
                 role="listbox" aria-label="视频模型" aria-hidden={modelClosing}
                 onPointerDown={e=>e.stopPropagation()}>
-                {videoModelOptions.map(option=><button key={option.name}
+                {(h3Mode?h3VideoModelOptions:videoModelOptions).map(option=><button key={option.name}
                   type="button" role="option"
                   aria-selected={selectedModel===option.name}
                   className={'tn-video-model-row'+(selectedModel===option.name?' is-selected':'')}
@@ -618,9 +629,39 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
                     onClick={()=>api.update(id,{resolution:res})}>{res}</button>)}
                 </div>
               </>:<>
+                {h3Mode&&<>
+                  <div className="tn-video-setting-heading">H3 视频分辨率</div>
+                  <div className="tn-image-resolutions">
+                    {['480p','720p','768p','960p','1080p'].map(res=><button
+                      key={res} type="button"
+                      aria-pressed={(data.resolution||'768p')===res}
+                      className={(data.resolution||'768p')===res?'active':''}
+                      onClick={()=>api.update(id,{resolution:res})}>{res}</button>)}
+                  </div>
+                  {selectedModel==='h3-video-frames'&&<>
+                    <div className="tn-video-setting-heading">首尾帧（连接图片节点后选择）</div>
+                    <select aria-label="H3 首帧" value={data.h3FirstFrameId||''}
+                      onChange={event=>api.update(id,{h3FirstFrameId:event.target.value})}>
+                      <option value="">不使用首帧</option>
+                      {references.filter(ref=>ref.kind==='image').map(ref=>
+                        <option value={ref.id} key={ref.id}>{ref.token} · {ref.title}</option>)}
+                    </select>
+                    <select aria-label="H3 尾帧" value={data.h3LastFrameId||''}
+                      onChange={event=>api.update(id,{h3LastFrameId:event.target.value})}>
+                      <option value="">不使用尾帧</option>
+                      {references.filter(ref=>ref.kind==='image').map(ref=>
+                        <option value={ref.id} key={ref.id}>{ref.token} · {ref.title}</option>)}
+                    </select>
+                  </>}
+                  <label className="tn-h3-optimization">
+                    <input type="checkbox" checked={!!data.h3OptimizePrompt}
+                      onChange={event=>api.update(id,{h3OptimizePrompt:event.target.checked})}/>
+                    H3 优化提示词（额外计费）
+                  </label>
+                </>}
                 <div className="tn-video-setting-heading">生成时长</div>
                 <div className="tn-video-durations">
-                  {Array.from({length:museMode?7:12},(_,i)=>i+4).map(n=><button key={n}
+                  {Array.from({length:museMode?7:h3Mode?(selectedModel==='h3-video'?27:12):12},(_,i)=>i+4).map(n=><button key={n}
                     className={(data.duration||'5s')===n+'s'?'active':''}
                     onClick={()=>api.update(id,{duration:n+'s'})}>{n}s</button>)}
                 </div>
@@ -628,12 +669,14 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
             </div>}
           </div>}
           <span className="tn-compose-fill"/>
-          <button className="tn-submit" title={museMode?'使用 Muse 生成'+(kind==='video'?'视频':'图片'):
+          <button className="tn-submit" title={h3Mode?'使用元铂AI H3 生成视频':
+            museMode?'使用 Muse 生成'+(kind==='video'?'视频':'图片'):
             kind==='video'?'使用选定豆包账号生成视频':'生成内容'}
             onClick={()=>void api.generate(id)}><ArrowUp size={16}/></button>
         </div>
         {(kind==='video'||museMode)&&<div className="tn-job-caption">
-          {data.jobMessage|| (account?'使用 '+account.name+' 的独立 Edge 浏览器':
+          {data.jobMessage|| (h3Mode?'H3 API · '+selectedModel:
+            account?'使用 '+account.name+' 的独立 Edge 浏览器':
             museMode?'自动选择剩余额度最多的 Muse 账号':
               '选择账号后发送到 '+selectedModel)}
         </div>}

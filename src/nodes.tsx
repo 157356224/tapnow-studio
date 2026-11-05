@@ -30,6 +30,7 @@ type Actions = {
   reorderReferences: (nodeId:string,referenceId:string,direction:-1|1,currentPrompt?:string)=>void;
   openAccountsSettings: () => void;
   openMuseAccountsSettings: () => void;
+  openH3Settings: () => void;
   openAccountBrowser: (id: string) => Promise<void>;
   openMuseAccountBrowser: (id: string) => Promise<void>;
 };
