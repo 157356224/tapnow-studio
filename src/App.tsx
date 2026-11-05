@@ -29,6 +29,7 @@ import { AccountsPanel } from './AccountsPanel';
 import {MuseAccountsPanel} from './MuseAccountsPanel';
 import {MuseQuotaButton} from './MuseQuotaButton';
 import {H3SettingsPanel} from './H3SettingsPanel';
+import {VideoFrameEditor} from './VideoFrameEditor';
 import type {MuseAccount,MuseJob,MuseQuotaSummary} from './muse';
 import type { Kind, Project, ProjectSummary, StudioEdge, StudioNode, StudioNodeData } from './types';
 
@@ -135,6 +136,7 @@ function Workspace() {
   // A React Flow selected node may be selected by drag/marquee. Only a direct
   // click should reveal the floating editor and its input focus targets.
   const [editorState,setEditorState]=useState<NodeEditorState>({id:null,instant:true});
+  const [frameEditorId,setFrameEditorId]=useState<string|null>(null);
   const connectionStart = useRef<{nodeId:string;handleType:'source'|'target'} | null>(null);
   const viewport = useRef({x:0,y:0,zoom:1});
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -519,6 +521,48 @@ function Workspace() {
       extractingFrameIds.current.delete(id);
     }
   },[addNode,setEdges,revealNewNode,notify]);
+  const openFrameEditor=useCallback((id:string)=>{
+    const source=nodesRef.current.find(node=>node.id===id);
+    if(!source||source.data.kind!=='video'||source.data.demo||
+      !/^\/api\/uploads\/[^?#]+\.(?:mp4|mov|webm|ogg|m4v)$/i.test(
+        source.data.mediaUrl||''
+      )){
+      notify('请先生成或上传本地视频');
+      return;
+    }
+    setFrameEditorId(id);
+  },[notify]);
+  const extractFrameAt=useCallback(async(id:string,mediaUrl:string,seconds:number)=>{
+    if(extractingFrameIds.current.has(id))return false;
+    const source=nodesRef.current.find(node=>node.id===id);
+    if(!source||source.data.kind!=='video'||source.data.mediaUrl!==mediaUrl)
+      throw new Error('视频节点已发生变化，请重新打开帧编辑器');
+    extractingFrameIds.current.add(id);
+    try{
+      const result=await request<{
+        url:string;name:string;width:number;height:number;seconds:number;
+      }>('/api/videos/extract-frame',JSONBody({mediaUrl,seconds}));
+      const current=nodesRef.current.find(node=>node.id===id);
+      if(!current||current.data.mediaUrl!==mediaUrl)
+        throw new Error('视频已发生变化，提取图片已保存到本地素材目录');
+      const point={
+        x:current.position.x+Math.max(current.measured?.width||0,550)+125,
+        y:current.position.y+25
+      };
+      addNode('image',point,{
+        title:(current.data.title||'视频')+' · '+seconds.toFixed(2)+'s帧',
+        mediaUrl:result.url,mediaName:result.name,
+        mediaWidth:result.width,mediaHeight:result.height,
+        prompt:'',status:'done',progress:100,demo:false
+      });
+      // Deliberately do NOT create any edge: the extracted frame is independent.
+      revealNewNode(point,'image');
+      notify('已提取指定视频帧并放到画布（未连接）');
+      return true;
+    }finally{
+      extractingFrameIds.current.delete(id);
+    }
+  },[addNode,revealNewNode,notify]);
   const uploadFiles = useCallback(async(files:FileList|File[],point?:{x:number;y:number})=>{
     const list=Array.from(files);
     for(let i=0;i<list.length;i++){
@@ -845,17 +889,22 @@ function Workspace() {
     setPanel('inspector');
   },[setNodes]);
   const actions=useMemo(()=>({
-    update,generate,addAfter,addBefore,uploadFor,extractLastFrame,duplicate,remove,expand,inspect,
+    update,generate,addAfter,addBefore,uploadFor,extractLastFrame,
+    openFrameEditor,duplicate,remove,expand,inspect,
     openNodeMenu:(id:string,side:'source'|'target',x:number,y:number)=>openNodeMenu(id,side,x,y),
     accounts:doubaoAccounts,museAccounts,referencesFor,reorderReferences,
     openAccountsSettings:()=>setPanel('doubao'),
     openMuseAccountsSettings:()=>setPanel('muse'),
     openH3Settings:()=>setPanel('h3'),
     openAccountBrowser,openMuseAccountBrowser
-  }),[update,generate,addAfter,addBefore,openNodeMenu,uploadFor,extractLastFrame,duplicate,remove,
+  }),[update,generate,addAfter,addBefore,openNodeMenu,uploadFor,extractLastFrame,
+    openFrameEditor,duplicate,remove,
     expand,inspect,doubaoAccounts,museAccounts,referencesFor,reorderReferences,
     openAccountBrowser,openMuseAccountBrowser]);
   const selected=nodes.find(n=>n.selected) || null;
+  const frameEditorSource=frameEditorId
+    ?nodes.find(n=>n.id===frameEditorId&&n.data.kind==='video'&&
+      typeof n.data.mediaUrl==='string'):null;
   const onConnect=useCallback((connection:Connection)=>{
     if (!canConnect(connection.source, connection.target, edgesRef.current)) return;
     snapshot();
@@ -1517,6 +1566,15 @@ function Workspace() {
         ['Delete','删除选中的节点'],['节点右侧 +','延续当前创作流程'],['右上角运行全部','按依赖顺序模拟执行']
       ].map(([left,right])=><div key={left}><span>{left}</span><strong>{right}</strong></div>)}</div>
     </div></div>}
+    {frameEditorSource?.data.mediaUrl&&<VideoFrameEditor
+      key={frameEditorSource.id+frameEditorSource.data.mediaUrl}
+      title={frameEditorSource.data.title||'视频'}
+      mediaUrl={frameEditorSource.data.mediaUrl}
+      onClose={()=>setFrameEditorId(null)}
+      onExtract={seconds=>extractFrameAt(
+        frameEditorSource.id,frameEditorSource.data.mediaUrl!,seconds
+      )}
+    />}
     {activePreview&&<div className="modal-scrim preview-scrim" onMouseDown={()=>setPreview(null)}><div className="preview-modal" onMouseDown={e=>e.stopPropagation()}>
       <div className="preview-header"><span>{activePreview.data.title}</span><button onClick={()=>setPreview(null)}><X size={21}/></button></div>
       {activePreview.data.mediaUrl && activePreview.data.kind!=='audio'?<img src={activePreview.data.mediaUrl} alt={activePreview.data.title}/>:<div className="preview-text">{activePreview.data.text||activePreview.data.prompt||'暂无预览内容'}</div>}

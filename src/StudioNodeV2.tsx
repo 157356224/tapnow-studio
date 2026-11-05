@@ -7,7 +7,8 @@ import {
   Image as ImageIcon, Video, AlignLeft, AudioLines, Upload, Plus, Tag, Copy,
   FolderPlus, Maximize2, ChevronDown, ArrowUp, Sparkles, Check,
   Play, MoreHorizontal, Trash2, X, Settings2, RotateCw, WandSparkles,
-  CircleHelp, MousePointer2, LogIn, Gem, Volume2, Download, Pencil, ImagePlus
+  CircleHelp, MousePointer2, LogIn, Gem, Volume2, Download, Pencil, ImagePlus,
+  Film
 } from 'lucide-react';
 import { StudioActionsContext } from './nodes';
 import type { Kind, StudioNode } from './types';
@@ -503,6 +504,10 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
         <button title="在此添加节点" onClick={()=>api.addAfter(id,downstream)}><FolderPlus size={17}/></button>
         <button title="放大" onClick={()=>api.expand(id)}><Maximize2 size={16}/></button>
         <button title="节点设置" onClick={()=>api.inspect(id)}><Settings2 size={16}/></button>
+        {isVideo&&<button type="button" title="提取指定视频帧"
+          aria-label="提取指定视频帧" onClick={event=>{
+            event.stopPropagation();api.openFrameEditor(id);
+          }}><Film size={17}/></button>}
         <button title="删除节点" onClick={()=>api.remove(id)}><Trash2 size={16}/></button>
         {isVideo&&<button type="button"
           title={extractingTailFrame?'正在提取视频尾帧':'提取视频尾帧（工具栏）'}

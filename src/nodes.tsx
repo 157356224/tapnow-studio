@@ -20,6 +20,7 @@ type Actions = {
   openNodeMenu: (id: string, side: 'source'|'target', x: number, y: number) => void;
   uploadFor: (id: string, file: File) => Promise<void>;
   extractLastFrame: (id: string) => Promise<void>;
+  openFrameEditor: (id: string) => void;
   duplicate: (id: string) => void;
   remove: (id: string) => void;
   expand: (id: string) => void;

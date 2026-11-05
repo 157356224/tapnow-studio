@@ -93,3 +93,47 @@ export async function extractVideoLastFrame(mediaUrl,{
     throw error;
   }
 }
+
+/** Decode the frame displayed at the requested playback time. A precise
+ * output-side seek is used so extraction does not snap to a keyframe. */
+export async function extractVideoFrameAt(mediaUrl,seconds,{
+  uploadDir,ffmpegPath=process.env.TAPNOW_FFMPEG_PATH||ffmpegStatic
+}={}){
+  const filename=localVideoFilename(mediaUrl);
+  if(!filename)throw new Error('请先生成或上传本地视频，再提取指定帧');
+  if(!uploadDir)throw new Error('缺少素材存储目录');
+  if(!ffmpegPath)throw new Error('未找到 FFmpeg，请重新安装项目依赖');
+  if(typeof seconds!=='number'||!Number.isFinite(seconds)||seconds<0)
+    throw new Error('视频时间点无效');
+  const source=path.join(uploadDir,filename);
+  let stat;
+  try{stat=await fs.stat(source);}
+  catch{throw new Error('原始视频文件不存在，请重新上传或生成');}
+  if(!stat.isFile()||!stat.size)
+    throw new Error('原始视频文件为空或不可读取');
+  const outputName=crypto.randomUUID()+'.png';
+  const destination=path.join(uploadDir,outputName);
+  try{
+    await runFfmpeg(ffmpegPath,[
+      '-y','-hide_banner','-loglevel','error',
+      '-i',source,'-ss',seconds.toFixed(6),
+      '-map','0:v:0','-an','-sn',
+      '-frames:v','1','-fps_mode','passthrough',
+      '-f','image2','-update','1',destination
+    ]);
+    const image=await fs.readFile(destination).catch(()=>null);
+    const pngSignature=Buffer.from([137,80,78,71,13,10,26,10]);
+    if(!image||image.length<24||!image.subarray(0,8).equals(pngSignature))
+      throw new Error('所选时间点没有可用的视频画面，请稍微向前移动时间轴');
+    const width=image.readUInt32BE(16),height=image.readUInt32BE(20);
+    if(!width||!height)throw new Error('无法获取视频帧尺寸');
+    return {
+      url:'/api/uploads/'+outputName,
+      name:path.parse(filename).name+'-'+seconds.toFixed(3)+'s.png',
+      width,height,seconds
+    };
+  }catch(error){
+    await fs.rm(destination,{force:true}).catch(()=>{});
+    throw error;
+  }
+}

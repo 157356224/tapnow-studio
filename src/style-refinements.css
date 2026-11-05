@@ -101,6 +101,123 @@
   .tn-node-frame .tn-media.tn-media-reveal{animation:none!important}
 }
 
+/* Video clip frame extraction: independent, viewport-fixed editing surface. */
+.tn-frame-editor-backdrop{
+  position:fixed;inset:0;z-index:9000;display:flex;align-items:center;
+  justify-content:center;padding:24px;background:rgba(5,6,10,.89);
+  backdrop-filter:blur(13px);-webkit-backdrop-filter:blur(13px)
+}
+.tn-frame-editor{
+  width:min(1000px,calc(100vw - 40px));max-height:calc(100vh - 32px);
+  overflow-y:auto;display:flex;flex-direction:column;
+  color:#f1f1f4;background:#1d1e22;border:1px solid #41424a;
+  border-radius:20px;box-shadow:0 30px 90px #000c;
+  animation:tn-frame-appear .2s ease-out both
+}
+@keyframes tn-frame-appear{
+  from{opacity:0;transform:translateY(10px) scale(.988)}
+  to{opacity:1;transform:translateY(0) scale(1)}
+}
+.tn-frame-editor button{cursor:pointer}
+.tn-frame-editor button:disabled{cursor:default;opacity:.52}
+.tn-frame-editor-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:16px 20px;gap:14px
+}
+.tn-frame-editor-title{display:flex;align-items:baseline;gap:12px;min-width:0}
+.tn-frame-editor-title strong{font-size:16px;font-weight:650;white-space:nowrap}
+.tn-frame-editor-title small{font-size:12px;color:#999ba5;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.tn-frame-editor-header button{
+  display:grid;place-items:center;flex:0 0 34px;width:34px;height:34px;
+  border:0;border-radius:9px;background:#303138;color:#d5d5db
+}
+.tn-frame-editor-header button:hover{background:#44454d}
+.tn-frame-editor-stage{
+  display:flex;align-items:center;justify-content:center;
+  background:#08090c;min-height:160px;max-height:min(53vh,520px);
+  margin:0 20px;border-radius:13px;overflow:hidden
+}
+.tn-frame-editor-stage video{
+  display:block;width:100%;height:min(53vh,520px);
+  max-width:100%;max-height:min(53vh,520px);
+  object-fit:contain;aspect-ratio:auto
+}
+.tn-frame-editor-bottom{padding:14px 20px 22px;display:flex;flex-direction:column;gap:9px}
+.tn-frame-transport{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  font-variant-numeric:tabular-nums
+}
+.tn-frame-playback{display:flex;align-items:center;gap:6px}
+.tn-frame-playback button{
+  display:grid;place-items:center;background:#34353c;color:#edeef3;border:0;
+  width:34px;height:32px;border-radius:9px
+}
+.tn-frame-playback button:hover{background:#50515e}
+.tn-frame-clock{font-size:12px;color:#ebedf2;letter-spacing:.3px}
+.tn-frame-clock span{color:#8d91a0}
+.tn-frame-ruler{
+  display:flex;justify-content:space-between;
+  color:#8e929f;font-size:10px;user-select:none;font-variant-numeric:tabular-nums;
+  margin-top:8px
+}
+.tn-frame-timeline{
+  height:94px;position:relative;border:1px solid #545662;
+  border-radius:9px;overflow:hidden;background:#242630
+}
+.tn-frame-filmstrip{
+  position:absolute;inset:0;display:grid;grid-template-columns:repeat(8,minmax(0,1fr));
+  gap:2px;pointer-events:none
+}
+.tn-frame-thumb{overflow:hidden;background:repeating-linear-gradient(
+  135deg,#333541,#333541 8px,#2b2d38 8px,#2b2d38 16px)}
+.tn-frame-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.tn-frame-playhead{
+  position:absolute;z-index:3;pointer-events:none;
+  top:0;bottom:0;left:var(--frame-percent);width:2px;
+  transform:translateX(-50%);background:#72b9ff;box-shadow:0 0 5px #2fa0fa99
+}
+.tn-frame-playhead span{
+  position:absolute;top:0;left:50%;transform:translateX(-50%);
+  width:14px;height:16px;background:#72b9ff;clip-path:polygon(0 0,100% 0,100% 62%,50% 100%,0 62%)
+}
+.tn-frame-timeline-input{
+  position:absolute;inset:0;z-index:5;width:100%;height:100%;
+  margin:0;opacity:0;cursor:ew-resize;appearance:none;-webkit-appearance:none;
+  touch-action:none
+}
+.tn-frame-timeline-input:focus-visible{outline:2px solid #72b9ff;outline-offset:-3px}
+.tn-frame-hint{margin:0;color:#9b9da8;font-size:11px}
+.tn-frame-editor-actions{
+  display:flex;justify-content:space-between;align-items:center;gap:14px;margin-top:5px
+}
+.tn-frame-cancel,.tn-frame-extract{
+  min-height:37px;display:inline-flex;align-items:center;justify-content:center;
+  gap:8px;padding:8px 14px;border:0;border-radius:9px;font-size:12px;font-weight:600
+}
+.tn-frame-cancel{color:#d4d5df;background:#32333a}
+.tn-frame-cancel:hover{background:#43444d}
+.tn-frame-extract{color:#121720;background:#9cbdff}
+.tn-frame-extract:hover{background:#c4d8ff}
+.tn-frame-action-right{display:flex;align-items:center;justify-content:flex-end;
+  gap:12px;min-width:0}
+.tn-frame-error{color:#ffac9b;font-size:12px;max-width:360px}
+.tn-frame-spinner{animation:tn-frame-spin .85s linear infinite}
+@keyframes tn-frame-spin{to{transform:rotate(360deg)}}
+@media(max-width:650px){
+  .tn-frame-editor-backdrop{padding:8px}
+  .tn-frame-editor{width:100%;max-height:95vh}
+  .tn-frame-editor-header{padding:12px}
+  .tn-frame-editor-stage{margin:0 12px}
+  .tn-frame-editor-bottom{padding:12px}
+  .tn-frame-timeline{height:66px}
+  .tn-frame-action-right{flex-direction:column-reverse;align-items:flex-end}
+}
+@media(prefers-reduced-motion:reduce){
+  .tn-frame-editor{animation:none}
+  .tn-frame-spinner{animation:none}
+}
+
 /* Selection bounds remain in React Flow coordinates. Controls are placed
    inside ViewportPortal and counter-scale so their hit areas stay 32px
    on screen at every zoom level, just like ordinary node ports. */

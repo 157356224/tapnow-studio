@@ -8,7 +8,7 @@ import { mountDoubaoRoutes } from './doubao.mjs';
 import { preserveCompletedVideoMedia } from './doubao-project.mjs';
 import {mountMuseRoutes} from './muse.mjs';
 import {preserveMuseCompletedMedia} from './muse-project.mjs';
-import {extractVideoLastFrame} from './video-last-frame.mjs';
+import {extractVideoLastFrame,extractVideoFrameAt} from './video-last-frame.mjs';
 import {mountH3Routes} from './yuanbo-h3.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -144,6 +144,23 @@ app.post('/api/videos/extract-last-frame',async(req,res,next)=>{
   }catch(error){
     const message=error instanceof Error?error.message:'尾帧提取失败';
     if(/请先生成|不存在|为空或不可读取/.test(message))
+      return res.status(400).json({error:message});
+    next(error);
+  }
+});
+app.post('/api/videos/extract-frame',async(req,res,next)=>{
+  const origin=req.headers.origin;
+  if(req.headers['sec-fetch-site']==='cross-site'||
+    (origin&&!['http://127.0.0.1:5173','http://localhost:5173',
+      'http://127.0.0.1:3701'].includes(origin)))
+    return res.status(403).json({error:'不允许跨站提取视频帧'});
+  try{
+    res.status(201).json(await extractVideoFrameAt(
+      req.body?.mediaUrl,req.body?.seconds,{uploadDir}
+    ));
+  }catch(error){
+    const message=error instanceof Error?error.message:'指定帧提取失败';
+    if(/请先生成|不存在|为空或不可读取|时间点无效|所选时间点/.test(message))
       return res.status(400).json({error:message});
     next(error);
   }

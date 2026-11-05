@@ -39,6 +39,7 @@
     "test:video-start": "node scripts/doubao-video-start-test.mjs",
     "test:video-download": "node scripts/doubao-completed-video-test.mjs",
     "test:video-last-frame": "node scripts/video-last-frame-test.mjs && node scripts/ui-video-last-frame-test.mjs",
+    "test:video-frame-editor": "node scripts/video-last-frame-test.mjs && node scripts/ui-video-frame-editor-test.mjs",
     "test:h3": "node scripts/yuanbo-h3-test.mjs && node scripts/ui-yuanbo-h3-test.mjs",
     "test:port-menu": "node scripts/ui-port-menu-test.mjs",
     "test:doubao": "node scripts/ui-doubao-test.mjs",

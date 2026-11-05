@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import ffmpegPath from 'ffmpeg-static';
-import {extractVideoLastFrame,localVideoFilename} from '../server/video-last-frame.mjs';
+import {extractVideoLastFrame,extractVideoFrameAt,localVideoFilename} from '../server/video-last-frame.mjs';
 
 assert.equal(localVideoFilename('/api/uploads/1234-5678.mp4'),'1234-5678.mp4');
 for(const invalid of [
@@ -45,6 +45,34 @@ try{
   const rgb=sample.stdout.subarray(0,3);
   assert.ok(rgb[0]>190&&rgb[1]<80&&rgb[2]<80,
     'Last frame must be RED, not the BLUE starting frames: '+rgb.toString('hex'));
+  const pick=async(seconds)=>{
+    const frame=await extractVideoFrameAt('/api/uploads/'+filename,seconds,{
+      uploadDir:folder
+    });
+    assert.equal(frame.width,96);
+    assert.equal(frame.height,54);
+    assert.equal(frame.seconds,seconds);
+    const pixels=spawnSync(ffmpegPath,[
+      '-hide_banner','-loglevel','error','-i',
+      path.join(folder,path.basename(frame.url)),
+      '-vf','scale=1:1','-frames:v','1','-pix_fmt','rgb24',
+      '-f','rawvideo','pipe:1'
+    ],{encoding:null});
+    assert.equal(pixels.status,0,String(pixels.stderr));
+    return pixels.stdout.subarray(0,3);
+  };
+  const earlier=await pick(.8);
+  assert.ok(earlier[2]>190&&earlier[0]<80&&earlier[1]<80,
+    'Frame at 0.8s must be BLUE (not a neighboring keyframe)');
+  const later=await pick(2.4);
+  assert.ok(later[0]>190&&later[1]<80&&later[2]<80,
+    'Frame at 2.4s must be RED');
+  await assert.rejects(extractVideoFrameAt('/api/uploads/'+filename,-1,{
+    uploadDir:folder
+  }),/时间点无效/);
+  await assert.rejects(extractVideoFrameAt('https://example.test/video.mp4',1,{
+    uploadDir:folder
+  }),/本地视频/);
   assert.ok(fs.existsSync(source),'Extraction must never modify/remove the source video');
 
   // Exercise fast seeking on videos longer than the 10-second tail window.
@@ -84,7 +112,7 @@ try{
   }),/FFmpeg|没有可用/);
   const after=new Set(fs.readdirSync(folder).filter(name=>name.endsWith('.png')));
   assert.deepEqual(after,before,'Failed extraction cleans incomplete PNG outputs');
-  console.log('PASS: FFmpeg true last frame on short and 12s long videos (red pixel), PNG dimensions, local-only paths, failed-output cleanup');
+  console.log('PASS: FFmpeg precise arbitrary frame at 0.8s BLUE and 2.4s RED, true tail extraction, PNG dimensions, local-only paths, failed-output cleanup');
 }finally{
   fs.rmSync(folder,{recursive:true,force:true});
 }
