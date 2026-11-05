@@ -105,11 +105,11 @@
 /* Muse/Doubao per-node provider selection. */
 .tn-provider-switch{display:flex;gap:2px;align-items:center;flex-shrink:0;
   border:1px solid #484951;background:#2b2c32;padding:3px;border-radius:9px}
-.tn-compose-footer .tn-provider-switch button{border:0!important;border-radius:6px!important;
+.tn-provider-switch button{border:0!important;border-radius:6px!important;
   background:transparent!important;color:#a9abb5!important;white-space:nowrap;
   font-size:11px!important;padding:6px 8px!important;transition:background .2s ease,color .2s ease}
-.tn-compose-footer .tn-provider-switch button.active{background:#505161!important;color:#fff!important}
-.tn-compose-footer .tn-provider-switch button:hover:not(.active){background:#3e3f49!important;color:#fff!important}
+.tn-provider-switch button.active{background:#505161!important;color:#fff!important}
+.tn-provider-switch button:hover:not(.active){background:#3e3f49!important;color:#fff!important}
 .tn-image .tn-compose-footer:has(.tn-provider-switch){flex-wrap:wrap;row-gap:5px}
 
 /* Read-only quota hover panel on the left canvas rail. */

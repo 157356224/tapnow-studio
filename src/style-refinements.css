@@ -423,6 +423,37 @@
 .tn-compose-footer{margin-top:2px}
 .tn-video .floating-compose{width:690px}
 .tn-video .tn-compose-footer{flex-wrap:wrap}
+.tn-compose-layout{
+  display:flex;flex-direction:column;align-items:center;
+  gap:9px;max-width:96vw
+}
+.tn-compose-layout .tn-provider-switch-outside{
+  align-self:center;width:max-content;max-width:100%;justify-content:center;
+  margin:0;box-shadow:0 8px 22px #0006;
+}
+.tn-compose-layout .tn-provider-switch-outside.tn-editor-closing{
+  animation:tn-editor-hide .4s cubic-bezier(.34,0,.72,1) forwards;
+  pointer-events:none
+}
+.tn-compose-footer .tn-submit-group{
+  display:inline-flex;align-items:center;gap:8px;
+  flex:0 0 auto;margin-left:auto;
+}
+.tn-compose-footer .tn-submit-group .tn-submit{
+  margin-left:0!important;flex:0 0 32px
+}
+.tn-generation-cost{
+  display:inline-flex;align-items:center;gap:4px;
+  white-space:nowrap;font-variant-numeric:tabular-nums;
+  font-size:11px;color:#9a9ca7;user-select:none;
+}
+.tn-generation-cost.tn-cost-known{color:#c9cad6}
+.tn-generation-cost strong{font-size:12px;font-weight:600;color:#e9e9f2}
+.tn-generation-cost small{color:#aeb0c0;font-size:11px}
+@media(max-width:760px){
+  .tn-compose-layout{width:min(690px,94vw)}
+  .tn-generation-cost{font-size:10px}
+}
 
 /* One seamless tapered gradient silhouette per light. The duplicate blurred
    silhouette is its soft aura, not another dashed segment. */

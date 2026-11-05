@@ -164,6 +164,9 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
   const textComposing=useRef(false);
   const [menu, setMenu] = useState(false);
   const [showModel, setShowModel] = useState(false);
+  const [costQuote,setCostQuote]=useState<{credits:number;yuan:number}|null>(null);
+  const [costLoading,setCostLoading]=useState(false);
+  const [costError,setCostError]=useState('');
   const [extractingTailFrame,setExtractingTailFrame]=useState(false);
   const [modelMounted,setModelMounted]=useState(false);
   const [modelClosing,setModelClosing]=useState(false);
@@ -213,6 +216,46 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
   const selectedModel=kind==='video'
     ?(models.video.includes(data.model||'')?data.model!:defaultVideoModel)
     :(data.model||models[kind][0]);
+  useEffect(()=>{
+    if(!showingCompose||!h3Mode){
+      setCostQuote(null);setCostLoading(false);setCostError('');
+      return;
+    }
+    const controller=new AbortController();
+    setCostQuote(null);setCostLoading(true);setCostError('');
+    const timer=window.setTimeout(async()=>{
+      const params=new URLSearchParams({
+        model:selectedModel,
+        duration:String(Number.parseInt(data.duration||'6s',10)),
+        resolution:data.resolution||'768p',
+        ratio:data.ratio||'16:9',
+        optimizePrompt:String(!!data.h3OptimizePrompt)
+      });
+      try{
+        const res=await fetch('/api/h3/estimate?'+params,{
+          signal:controller.signal
+        });
+        const body=await res.json() as {
+          credits?:number;yuan?:number;error?:string
+        };
+        if(!res.ok||!Number.isFinite(body.credits)||!Number.isFinite(body.yuan))
+          throw new Error(body.error||'暂无可用的积分报价');
+        if(!controller.signal.aborted){
+          setCostQuote({credits:body.credits!,yuan:body.yuan!});
+          setCostError('');
+        }
+      }catch(error){
+        if(!controller.signal.aborted){
+          setCostQuote(null);
+          setCostError((error as Error).message);
+        }
+      }finally{
+        if(!controller.signal.aborted)setCostLoading(false);
+      }
+    },180);
+    return ()=>{window.clearTimeout(timer);controller.abort();};
+  },[showingCompose,h3Mode,selectedModel,data.duration,data.resolution,
+    data.ratio,data.h3OptimizePrompt]);
   useEffect(()=>{
     if(showingCompose)return;
     setShowDuration(false);setShowModel(false);
@@ -480,6 +523,8 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
       </div>
     </NodeToolbar>
     {kind!=='audio'&&<NodeToolbar isVisible={toolbarVisible} position={Position.Bottom} offset={15} align="center">
+      <div className="tn-compose-layout nodrag nowheel"
+        onMouseDown={e=>e.stopPropagation()} onPointerDown={e=>e.stopPropagation()}>
       <div className={'floating-compose nodrag nowheel'+(closingComposer?' tn-editor-closing':'')}
         onMouseDown={e=>e.stopPropagation()} onPointerDown={e=>e.stopPropagation()}>
         <div className="tn-compose-top">
@@ -511,26 +556,6 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
           onChange={next=>api.update(id,{prompt:next})}
         />}
         <div className="tn-compose-footer">
-          {kind==='video'&&<div className="tn-provider-switch"
-            role="group" aria-label="生成服务">
-            {[
-              {id:'doubao',label:'豆包生成'},{id:'muse',label:'Muse 生成'},
-              {id:'h3',label:'H3 API'}
-            ].map(item=><button key={item.id} type="button"
-              className={provider===item.id?'active':''}
-              aria-pressed={provider===item.id}
-              onClick={()=>{
-                api.update(id,{provider:item.id as 'doubao'|'muse'|'h3',
-                  ...(item.id==='h3'?{
-                    model:'h3-video',duration:'6s',resolution:'768p'
-                  }:item.id==='doubao'||item.id==='muse'?{
-                    model:defaultVideoModel,duration:'5s',resolution:'720p'
-                  }:{}),
-                  ...(item.id==='muse'&&kind==='video'&&Number.parseInt(data.duration||'5s',10)>10
-                    ?{duration:'10s'}:{})});
-                setShowDuration(false);setShowModel(false);
-              }}>{item.label}</button>)}
-          </div>}
           {kind==='image'&&<div className="tn-provider-switch"
             role="group" aria-label="生成服务">
             <button type="button" className="active" aria-pressed="true">Muse 生图</button>
@@ -669,10 +694,26 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
             </div>}
           </div>}
           <span className="tn-compose-fill"/>
-          <button className="tn-submit" title={h3Mode?'使用元铂AI H3 生成视频':
-            museMode?'使用 Muse 生成'+(kind==='video'?'视频':'图片'):
-            kind==='video'?'使用选定豆包账号生成视频':'生成内容'}
-            onClick={()=>void api.generate(id)}><ArrowUp size={16}/></button>
+          <div className="tn-submit-group">
+            {(kind==='video'||kind==='image')&&<span
+              className={'tn-generation-cost'+(costQuote?' tn-cost-known':'')}
+              role="status" aria-label="本次生成积分估算"
+              title={h3Mode
+                ?costError||'按元铂AI当前 /models 售价估算，最终扣费以平台账单为准'
+                :'该平台未提供可核对的统一积分价格，不能按元铂AI积分计价'}>
+              {h3Mode&&costQuote
+                ?<>预计 <strong>{costQuote.credits.toLocaleString('zh-CN',{
+                  maximumFractionDigits:3
+                })} 积分</strong> <small>¥{costQuote.yuan.toFixed(
+                  costQuote.credits%1===0?2:3
+                )}</small></>
+                :<span>{h3Mode?(costLoading?'计算积分中…':'积分待查询'):'积分：—'}</span>}
+            </span>}
+            <button className="tn-submit" title={h3Mode?'使用元铂AI H3 生成视频':
+              museMode?'使用 Muse 生成'+(kind==='video'?'视频':'图片'):
+              kind==='video'?'使用选定豆包账号生成视频':'生成内容'}
+              onClick={()=>void api.generate(id)}><ArrowUp size={16}/></button>
+          </div>
         </div>
         {(kind==='video'||museMode)&&<div className="tn-job-caption">
           {data.jobMessage|| (h3Mode?'H3 API · '+selectedModel:
@@ -680,6 +721,29 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
             museMode?'自动选择剩余额度最多的 Muse 账号':
               '选择账号后发送到 '+selectedModel)}
         </div>}
+      </div>
+      {kind==='video'&&<div className={'tn-provider-switch tn-provider-switch-outside'+
+        (closingComposer?' tn-editor-closing':'')} role="group"
+        aria-label="生成服务">
+        {[
+          {id:'doubao',label:'豆包生成'},{id:'muse',label:'Muse 生成'},
+          {id:'h3',label:'H3 API'}
+        ].map(item=><button key={item.id} type="button"
+          className={provider===item.id?'active':''}
+          aria-pressed={provider===item.id}
+          onClick={()=>{
+            api.update(id,{provider:item.id as 'doubao'|'muse'|'h3',
+              ...(item.id==='h3'?{
+                model:'h3-video',duration:'6s',resolution:'768p'
+              }:item.id==='doubao'||item.id==='muse'?{
+                model:defaultVideoModel,duration:'5s',resolution:'720p'
+              }:{}),
+              ...(item.id==='muse'&&kind==='video'&&
+                Number.parseInt(data.duration||'5s',10)>10
+                ?{duration:'10s'}:{})});
+            setShowDuration(false);setShowModel(false);
+          }}>{item.label}</button>)}
+      </div>}
       </div>
     </NodeToolbar>}
   </div>;

@@ -43,6 +43,34 @@ export function validateH3Parameters(model,duration,resolution,ratio){
   return {duration,resolution,aspect_ratio:ratio};
 }
 
+// Never guess a flat rate: the Yuanbo /models endpoint returns model-specific
+// credits per second, a minimum charge and separate prompt optimization cost.
+export function estimateH3Credits(models,{
+  model,duration,resolution,ratio,optimizePrompt=false
+}){
+  validateH3Parameters(model,duration,resolution,ratio);
+  const entry=Array.isArray(models)?models.find(item=>item.id===model):null;
+  const pricing=entry?.pricing;
+  const rate=pricing?.perSecond?.find(item=>item.resolution===resolution)?.credits;
+  const minimum=Number(pricing?.minimumCredits);
+  if(typeof rate!=='number'||!Number.isFinite(rate)||rate<0||
+    !Number.isFinite(minimum)||minimum<0)
+    throw new Error('元铂AI未提供该模型和分辨率的当前积分单价');
+  if(pricing?.perOutput?.length)
+    throw new Error('此模型存在额外按输出计费的价格，暂无法准确估价');
+  const optimization=optimizePrompt?Number(pricing?.promptOptimizationCredits):0;
+  if(!Number.isFinite(optimization)||optimization<0)
+    throw new Error('元铂AI未提供提示词优化的准确积分价格');
+  const videoCredits=Math.round(Math.max(minimum,duration*rate)*1000)/1000;
+  const credits=Math.round((videoCredits+optimization)*1000)/1000;
+  return {
+    model,duration,resolution,videoCredits,
+    optimizationCredits:optimization,
+    credits,yuan:Math.round(credits*100)/10000,
+    estimated:true,source:'yuanbo-models'
+  };
+}
+
 export function buildH3Generation({model,prompt,parameters,inputs=[],optimizePrompt=false,note=''}){
   const {duration,resolution,aspect_ratio}=validateH3Parameters(
     model,parameters.duration,parameters.resolution,parameters.aspect_ratio);
@@ -110,6 +138,10 @@ export function mountH3Routes(app,readProjects,writeProjects,{
     for(const job of existing)if(job?.id)jobs.set(job.id,job);
   }catch{}
   const inFlight=new Set();
+  let modelCache=null;
+  let modelCacheKey='';
+  let modelCacheUntil=0;
+  let modelRequest=null;
   const configuredKey=()=>{
     const env=process.env.YUANBO_API_KEY?.trim();
     if(env)return env;
@@ -141,6 +173,21 @@ export function mountH3Routes(app,readProjects,writeProjects,{
   const api=(url,opts={})=>fetchJson(fetchImpl,baseUrl+url,{
     ...opts,token:configuredKey()
   });
+  const getModels=async()=>{
+    const key=configuredKey();
+    if(!key)throw new Error('请先配置元铂AI API Key');
+    if(modelCache&&modelCacheKey===key&&Date.now()<modelCacheUntil)
+      return modelCache;
+    if(modelRequest&&modelCacheKey===key)return modelRequest;
+    modelCacheKey=key;
+    modelRequest=api('/models').then(remote=>{
+      const models=remote?.data||remote?.models||remote;
+      if(!Array.isArray(models))throw new Error('元铂AI模型价格返回格式不正确');
+      modelCache=models;modelCacheUntil=Date.now()+60000;
+      return models;
+    }).finally(()=>{modelRequest=null;});
+    return modelRequest;
+  };
   const localAsset=ref=>{
     const filename=safeFile(ref.url);
     if(!filename)throw new Error('H3 参考素材必须是画布中的本地上传文件：'+ref.name);
@@ -288,19 +335,41 @@ export function mountH3Routes(app,readProjects,writeProjects,{
     const temp=configPath+'.tmp';
     fs.writeFileSync(temp,JSON.stringify({apiKey:key}),{mode:0o600});
     fs.renameSync(temp,configPath);
+    modelCache=null;modelCacheUntil=0;modelCacheKey='';
     res.json({configured:true,masked:'••••'+key.slice(-4)});
   });
   app.delete('/api/h3/config',(_req,res)=>{
     fs.rmSync(configPath,{force:true});
+    modelCache=null;modelCacheUntil=0;modelCacheKey='';
     const key=configuredKey();
     res.json({configured:!!key,masked:key?'••••'+key.slice(-4):''});
   });
   app.get('/api/h3/models',async(_req,res)=>{
     try{
-      if(!configuredKey())return res.status(400).json({error:'请先配置元铂AI API Key'});
-      const remote=await api('/models');
-      res.json({models:remote.data||remote.models||remote});
+      res.json({models:await getModels()});
     }catch(error){res.status(502).json({error:String(error.message||error)});}
+  });
+  app.get('/api/h3/estimate',async(req,res)=>{
+    const model=String(req.query.model||'');
+    const duration=Number(req.query.duration);
+    const resolution=String(req.query.resolution||'');
+    const ratio=String(req.query.ratio||'');
+    const optimizePrompt=req.query.optimizePrompt==='true';
+    try{
+      validateH3Parameters(model,duration,resolution,ratio);
+    }catch(error){
+      return res.status(400).json({error:String(error.message||error)});
+    }
+    try{
+      const models=await getModels();
+      res.json(estimateH3Credits(models,{
+        model,duration,resolution,ratio,optimizePrompt
+      }));
+    }catch(error){
+      const message=String(error.message||error);
+      res.status(/请先配置/.test(message)?400:502)
+        .json({error:message});
+    }
   });
   app.get('/api/h3/jobs/:id',(req,res)=>{
     const job=jobs.get(req.params.id);

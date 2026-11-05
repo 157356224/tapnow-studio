@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import express from 'express';
 import {
-  mountH3Routes,H3_MODELS,buildH3Generation,validateH3Parameters
+  mountH3Routes,H3_MODELS,buildH3Generation,validateH3Parameters,
+  estimateH3Credits
 } from '../server/yuanbo-h3.mjs';
 
 assert.deepEqual(H3_MODELS,['h3-video','h3-video-flex','h3-video-frames']);
@@ -71,7 +72,17 @@ const remoteFetch=async(url,options={})=>{
   }
   checkHeader(options);
   if(target.pathname.endsWith('/models')){
-    return json({data:H3_MODELS.map(id=>({id,price:'not-tested'}))});
+    return json({data:H3_MODELS.map((id,index)=>({
+      id,pricing:{
+        minimumCredits:6,promptOptimizationCredits:5,
+        perSecond:[
+          {resolution:'480p',credits:1.5},
+          {resolution:'768p',credits:3.5+index},
+          {resolution:'1080p',credits:8.5}
+        ],
+        perOutput:[]
+      }
+    }))});
   }
   if(target.pathname.endsWith('/uploads')&&method==='POST'){
     const body=JSON.parse(options.body);
@@ -133,6 +144,29 @@ try{
   const models=await req('/api/h3/models');
   assert.equal(models.status,200);
   assert.equal(models.body.models.length,3);
+  assert.deepEqual(estimateH3Credits(models.body.models,{
+    model:'h3-video',duration:6,resolution:'768p',ratio:'16:9'
+  }),{
+    model:'h3-video',duration:6,resolution:'768p',
+    videoCredits:21,optimizationCredits:0,
+    credits:21,yuan:0.21,estimated:true,source:'yuanbo-models'
+  });
+  const quoted=await req('/api/h3/estimate?model=h3-video&duration=6&resolution=768p&ratio=16%3A9');
+  assert.equal(quoted.status,200,JSON.stringify(quoted.body));
+  assert.equal(quoted.body.credits,21);
+  assert.equal(quoted.body.yuan,0.21);
+  const optimized=await req('/api/h3/estimate?model=h3-video-flex&duration=6&resolution=768p&ratio=16%3A9&optimizePrompt=true');
+  assert.equal(optimized.status,200);
+  assert.equal(optimized.body.videoCredits,27);
+  assert.equal(optimized.body.optimizationCredits,5);
+  assert.equal(optimized.body.credits,32);
+  assert.equal(optimized.body.yuan,0.32);
+  const floor=await req('/api/h3/estimate?model=h3-video-frames&duration=4&resolution=480p&ratio=9%3A16');
+  assert.equal(floor.status,200);
+  assert.equal(floor.body.credits,6,'Minimum credits must apply');
+  const invalidQuote=await req('/api/h3/estimate?model=h3-video&duration=6&resolution=720p&ratio=1%3A1');
+  assert.equal(invalidQuote.status,400);
+  assert.equal(models.body.models.length,3);
   const blocked=await req('/api/h3/jobs','POST',{
     projectId:project.id,nodeId:'not-h3-node',references:[]
   });
@@ -174,7 +208,7 @@ try{
   assert.ok(keyFile.includes('sc_live_local_test_key'));
   const jobfile=fs.readFileSync(path.join(dataDir,'yuanbo-h3-jobs.json'),'utf8');
   assert.equal(jobfile.includes('sc_live_local_test_key'),false);
-  console.log('PASS: all 3 H3 models, bearer config, upload+signed PUT+complete, reference roles, idempotent native job creation, completed download, canvas persistence');
+  console.log('PASS: live-model-style H3 pricing by model, resolution, duration, minimum and optimization + 3 models API generation, assets and canvas persistence');
 }finally{
   await new Promise(resolve=>server.close(resolve));
   fs.rmSync(dir,{recursive:true,force:true});

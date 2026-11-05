@@ -50,6 +50,18 @@ try{
     if(pathname==='/api/h3/models')return send(route,{
       models:['h3-video','h3-video-flex','h3-video-frames'].map(id=>({id}))
     });
+    if(pathname==='/api/h3/estimate'){
+      const params=new URL(request.url()).searchParams;
+      const model=params.get('model');
+      const rate=params.get('resolution')==='480p'?1.5:
+        model==='h3-video-frames'?5.5:
+        model==='h3-video-flex'?4.5:3.5;
+      const cost=Math.max(6,rate*Number(params.get('duration')||6))+
+        (params.get('optimizePrompt')==='true'?5:0);
+      return send(route,{
+        model,credits:cost,yuan:cost/100,estimated:true
+      });
+    }
     if(pathname==='/api/muse/quotas')return send(route,{
       totalAccounts:0,knownAccounts:0,unknownAccounts:0,
       totalUsed:0,totalRemaining:0,rows:[],refreshing:false
@@ -62,8 +74,28 @@ try{
   await video.locator('.tn-node-caption').click();
   const compose=page.locator('.floating-compose:not(.tn-editor-closing)');
   await compose.waitFor({state:'visible'});
-  assert.equal(await compose.getByRole('button',{name:'H3 API',exact:true}).getAttribute('aria-pressed'),
+  const providerBar=page.locator('.tn-provider-switch-outside');
+  await providerBar.waitFor({state:'visible'});
+  assert.equal(await providerBar.evaluate(el=>Boolean(el.closest('.floating-compose'))),false,
+    'Provider selection must be outside prompt card, not in its footer');
+  const promptRect=await compose.boundingBox();
+  const barRect=await providerBar.boundingBox();
+  assert.ok(promptRect&&barRect);
+  assert.ok(barRect.y>=promptRect.y+promptRect.height+2,
+    'Provider switch is below the prompt card');
+  assert.ok(Math.abs(barRect.x+barRect.width/2-
+    (promptRect.x+promptRect.width/2))<4,
+    'Provider switch must be horizontally centered below the prompt');
+  assert.equal(await providerBar.getByRole('button',{name:'H3 API',exact:true}).getAttribute('aria-pressed'),
     'true','Existing H3 project must reopen with H3 selected');
+  const quote=compose.getByRole('status',{name:'本次生成积分估算'});
+  await quote.getByText('21 积分',{exact:false}).waitFor({state:'visible'});
+  assert.match(await quote.innerText(),/¥0\.21/);
+  const quoteRect=await quote.boundingBox();
+  const submitRect=await compose.locator('.tn-submit').boundingBox();
+  assert.ok(quoteRect&&submitRect);
+  assert.ok(quoteRect.x+quoteRect.width<=submitRect.x+1,
+    'Credits and RMB must appear immediately to the LEFT of Send');
   const toggle=compose.locator('.tn-video-model-picker>button');
   assert.match(await toggle.innerText(),/h3-video/);
   await toggle.click();
@@ -77,6 +109,8 @@ try{
   await choices.getByRole('option',{name:/h3-video-frames/}).click();
   await page.waitForTimeout(380);
   assert.match(await toggle.innerText(),/h3-video-frames/);
+  await quote.getByText('33 积分',{exact:false}).waitFor({state:'visible'});
+  assert.match(await quote.innerText(),/¥0\.33/);
   const settingsButton=compose.locator('.tn-video-settings-toggle');
   await settingsButton.click();
   const frameSelect=page.getByRole('combobox',{name:'H3 首帧'});
@@ -85,6 +119,15 @@ try{
     'Connected image should be available as an H3 first frame');
   await frameSelect.selectOption('h3-frame-source');
   assert.equal(await frameSelect.inputValue(),'h3-frame-source');
+  await compose.getByRole('button',{name:'480p',exact:true}).click();
+  await quote.getByText('9 积分',{exact:false}).waitFor({state:'visible'});
+  assert.match(await quote.innerText(),/¥0\.09/);
+  await compose.locator('.tn-video-durations')
+    .getByRole('button',{name:'8s',exact:true}).click();
+  await quote.getByText('12 积分',{exact:false}).waitFor({state:'visible'});
+  await compose.getByRole('checkbox',{name:/H3 优化提示词/}).check();
+  await quote.getByText('17 积分',{exact:false}).waitFor({state:'visible'});
+  assert.match(await quote.innerText(),/¥0\.17/);
   const h3KeyButton=compose.getByRole('button',{name:/H3 API Key/});
   await h3KeyButton.click();
   const keyInput=page.getByLabel('元铂AI API Key');
@@ -95,7 +138,7 @@ try{
   await page.getByText('API Key 验证通过',{exact:false}).waitFor({state:'visible'});
   assert.equal(configured,true);
   assert.deepEqual(errors,[],'H3 UI should not produce browser exceptions');
-  console.log('PASS: H3 provider reopens, all 3 model choices, connected first frame, local API Key settings and remote model lookup');
+  console.log('PASS: provider switch outside bottom CENTER, real-position cost to LEFT of Send, model-dependent credits and yuan, H3 frames, API Key settings');
 }finally{
   await browser.close();
 }
