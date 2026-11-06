@@ -32,6 +32,7 @@ type Actions = {
   openAccountsSettings: () => void;
   openMuseAccountsSettings: () => void;
   openH3Settings: () => void;
+  openChatGPTSettings: () => void;
   openAccountBrowser: (id: string) => Promise<void>;
   openMuseAccountBrowser: (id: string) => Promise<void>;
 };

@@ -129,13 +129,12 @@ try{
   await accountPanel.getByRole('button',{name:'关闭'}).click();
   const videoNode=page.locator('.react-flow__node[data-id="video-node"]');
   await videoNode.locator('.tn-node-frame').click();
-  const editor=page.locator('.floating-compose').filter({
-    has:page.getByRole('button',{name:'豆包生成',exact:true})
-  });
-  await editor.getByRole('button',{name:'Muse 生成',exact:true}).click();
+  const editor=page.locator('.floating-compose:not(.tn-editor-closing)');
+  const providerSwitch=page.getByRole('group',{name:'生成服务'});
+  await providerSwitch.getByRole('button',{name:'Muse 生成',exact:true}).click();
   assert.equal(await editor.locator('.tn-video-model-picker').count(),0,
     'Muse video mode hides all model options');
-  assert.equal(await editor.getByRole('button',{name:'Muse 生成',exact:true})
+  assert.equal(await providerSwitch.getByRole('button',{name:'Muse 生成',exact:true})
     .getAttribute('aria-pressed'),'true');
   await editor.locator('select[aria-label="Muse 生成账号"] option[value="'+account.id+'"]')
     .waitFor({state:'attached'});

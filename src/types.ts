@@ -11,7 +11,7 @@ export type StudioNodeData = Record<string, unknown> & {
   mediaWidth?: number;
   mediaHeight?: number;
   model?: string;
-  provider?: 'doubao'|'muse'|'h3'|'demo';
+  provider?: 'doubao'|'muse'|'h3'|'chatgpt'|'demo';
   museAccountId?: string;
   ratio?: string;
   resolution?: string;

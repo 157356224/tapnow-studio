@@ -218,6 +218,30 @@
   .tn-frame-spinner{animation:none}
 }
 
+.tn-chatgpt-progress{
+  position:absolute;right:13px;bottom:13px;z-index:5;
+  padding:6px 11px;border-radius:18px;background:#f9fbff;
+  color:#0875db;font-size:13px;font-weight:700;line-height:18px;
+  box-shadow:0 3px 13px #0003;font-variant-numeric:tabular-nums;
+  pointer-events:none
+}
+.tn-chatgpt-account button{
+  display:flex;align-items:center;gap:5px;font-size:12px;
+  padding:6px 8px;border-radius:8px;background:#34363e;color:#f1f1f4
+}
+.tn-chatgpt-panel{padding:22px 16px;display:flex;flex-direction:column;gap:12px}
+.tn-chatgpt-panel h3{font-size:17px;margin:0}
+.tn-chatgpt-panel p{margin:0;color:#c1c2ca;font-size:12px;line-height:1.7}
+.tn-chatgpt-login-state{background:#2a2d36;border-radius:9px;
+  padding:12px;color:#d8d9e2;font-size:12px}
+.tn-chatgpt-panel-actions{display:flex;gap:8px}
+.tn-chatgpt-panel-actions button{
+  display:flex;align-items:center;gap:5px;padding:9px 11px;
+  border-radius:9px;background:#393c47;color:#f1f2f8;font-size:12px
+}
+.tn-chatgpt-panel-actions button:disabled{opacity:.5}
+.tn-chatgpt-panel .tn-chatgpt-panel-note{font-size:11px;color:#888b9b}
+
 /* Selection bounds remain in React Flow coordinates. Controls are placed
    inside ViewportPortal and counter-scale so their hit areas stay 32px
    on screen at every zoom level, just like ordinary node ports. */

@@ -10,6 +10,7 @@ import {mountMuseRoutes} from './muse.mjs';
 import {preserveMuseCompletedMedia} from './muse-project.mjs';
 import {extractVideoLastFrame,extractVideoFrameAt} from './video-last-frame.mjs';
 import {mountH3Routes} from './yuanbo-h3.mjs';
+import {mountChatGPTRoutes,preserveChatGPTCompletedMedia} from './chatgpt.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.join(root, 'data');
@@ -107,7 +108,8 @@ app.put('/api/projects/:id', (req, res) => {
     ...old,
     title: typeof req.body.title === 'string' ? req.body.title.slice(0, 100) : old.title,
     nodes: Array.isArray(req.body.nodes)
-      ?preserveMuseCompletedMedia(old,preserveCompletedVideoMedia(old,req.body.nodes))
+      ?preserveChatGPTCompletedMedia(old,
+        preserveMuseCompletedMedia(old,preserveCompletedVideoMedia(old,req.body.nodes)))
       :old.nodes,
     edges: Array.isArray(req.body.edges) ? req.body.edges : old.edges,
     viewport: req.body.viewport || old.viewport,
@@ -169,6 +171,7 @@ app.use('/api/uploads', express.static(uploadDir, { dotfiles: 'deny' }));
 mountDoubaoRoutes(app,read,write);
 mountMuseRoutes(app,read,write);
 mountH3Routes(app,read,write,{dataDir,uploadDir});
+mountChatGPTRoutes(app,read,write,{dataDir,uploadDir});
 function planWorkflow(nodes, edges) {
   const lookup = new Map(nodes.map(x => [x.id, x]));
   const indegree = new Map(nodes.map(x => [x.id, 0]));

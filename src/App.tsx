@@ -30,6 +30,7 @@ import {MuseAccountsPanel} from './MuseAccountsPanel';
 import {MuseQuotaButton} from './MuseQuotaButton';
 import {H3SettingsPanel} from './H3SettingsPanel';
 import {VideoFrameEditor} from './VideoFrameEditor';
+import {ChatGPTPanel} from './ChatGPTPanel';
 import type {MuseAccount,MuseJob,MuseQuotaSummary} from './muse';
 import type { Kind, Project, ProjectSummary, StudioEdge, StudioNode, StudioNodeData } from './types';
 
@@ -47,7 +48,12 @@ const entryTools: { kind: Kind; label: string; desc: string; icon: typeof ImageI
 ];
 const uid = () => crypto.randomUUID();
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-type Panel = 'agent' | 'projects' | 'assets' | 'inspector' | 'doubao' | 'muse' | 'h3' | null;
+type Panel = 'agent' | 'projects' | 'assets' | 'inspector' | 'doubao' | 'muse' | 'h3' | 'chatgpt' | null;
+type ChatGPTImageJob={
+  id:string;status:'queued'|'starting'|'running'|'completed'|'error'|'needs-login'|'interrupted';
+  progress:number|null;message:string;error?:string;mediaUrl?:string;
+  mediaWidth?:number;mediaHeight?:number;
+};
 type H3Job={id:string;status:'queued'|'starting'|'running'|'completed'|'failed'|'interrupted';
   progress:number;message:string;videoUrl?:string;};
 type NodeMenuOrigin = {id:string;side:'source'|'target';dropped:boolean;ids?:string[]};
@@ -606,6 +612,76 @@ function Workspace() {
     if(generatingNodeIds.current.has(id))return;
     generatingNodeIds.current.add(id);
     try{
+    if(source.data.kind==='image'&&kind==='image'&&
+      source.data.provider==='chatgpt'){
+      if(!projectId){notify('请先保存画布');return;}
+      let refs:ReturnType<typeof resolveReferences>=[];
+      try{
+        refs=resolveReferences(source.data.prompt||'',
+          source.data.referenceIds||[],referencesFor(id));
+      }catch(error){notify((error as Error).message);return;}
+      try{
+        const account=await request<{loginWindowOpen:boolean;profileCreated:boolean}>(
+          '/api/chatgpt/account');
+        if(account.loginWindowOpen||!account.profileCreated){
+          setPanel('chatgpt');
+          notify('请先打开独立 Edge 登录 ChatGPT，并在登录后关闭窗口');
+          return;
+        }
+        if(timer.current)clearTimeout(timer.current);
+        const staged=nodesRef.current.map(node=>node.id===id
+          ?{...node,data:{...node.data,provider:'chatgpt' as const,
+            status:'queued' as const,progress:0,
+            jobMessage:'ChatGPT 生图准备中'}}
+          :node);
+        nodesRef.current=staged;setNodes(staged);
+        setSaveStatus('正在保存…');
+        const saved=await saveProjectSnapshot(projectId,{
+          title,nodes:staged,edges:edgesRef.current,viewport:viewport.current
+        });
+        setSaveStatus('已保存到本地');
+        setProjects(ps=>ps.map(item=>item.id===projectId
+          ?{...item,updatedAt:saved.updatedAt}:item));
+        const job=await request<ChatGPTImageJob>('/api/chatgpt/jobs',JSONBody({
+          projectId,nodeId:id,prompt:source.data.prompt,
+          references:refs.map(ref=>({id:ref.id}))
+        }));
+        update(id,{jobId:job.id,status:'queued',progress:0,jobMessage:job.message});
+        for(let count=0;count<1000;count++){
+          await pause(1800);
+          const current=await request<ChatGPTImageJob>('/api/chatgpt/jobs/'+job.id);
+          if(!nodesRef.current.some(node=>node.id===id))return;
+          if(current.status==='completed'&&current.mediaUrl){
+            update(id,{status:'done',progress:100,
+              mediaUrl:current.mediaUrl,
+              mediaWidth:current.mediaWidth,
+              mediaHeight:current.mediaHeight,
+              jobMessage:current.message,demo:false});
+            notify('ChatGPT 原图已下载并回填画布');
+            return;
+          }
+          if(['error','needs-login','interrupted'].includes(current.status)){
+            update(id,{status:'error',progress:0,
+              jobMessage:current.error||current.message});
+            if(current.status==='needs-login')setPanel('chatgpt');
+            notify('ChatGPT 生图未完成：'+(current.error||current.message));
+            return;
+          }
+          update(id,{
+            status:['queued','starting'].includes(current.status)?'queued':'running',
+            ...(typeof current.progress==='number'?{progress:current.progress}:{}),
+            jobMessage:current.message
+          });
+        }
+        update(id,{status:'error',
+          jobMessage:'ChatGPT 生图等待超时，请检查独立 Edge 浏览器'});
+      }catch(error){
+        update(id,{status:'error',progress:0,
+          jobMessage:(error as Error).message});
+        notify('ChatGPT 生图失败：'+(error as Error).message);
+      }
+      return;
+    }
     if(source.data.kind==='video'&&kind==='video'&&source.data.provider==='h3'){
       if(!projectId){notify('请先保存画布');return;}
       if(!h3VideoModels.some(model=>model===source.data.model)){
@@ -896,6 +972,7 @@ function Workspace() {
     openAccountsSettings:()=>setPanel('doubao'),
     openMuseAccountsSettings:()=>setPanel('muse'),
     openH3Settings:()=>setPanel('h3'),
+    openChatGPTSettings:()=>setPanel('chatgpt'),
     openAccountBrowser,openMuseAccountBrowser
   }),[update,generate,addAfter,addBefore,openNodeMenu,uploadFor,extractLastFrame,
     openFrameEditor,duplicate,remove,
@@ -1390,6 +1467,7 @@ function Workspace() {
         {panel==='muse'&&<MuseAccountsPanel accounts={museAccounts}
           refresh={refreshMuseAccounts} onClose={()=>setPanel(null)} onSwitch={setPanel}/>}
         {panel==='h3'&&<H3SettingsPanel onClose={()=>setPanel(null)}/>}
+        {panel==='chatgpt'&&<ChatGPTPanel onClose={()=>setPanel(null)}/>}
         {panel==='agent' && <>
           <div className="panel-topline"><span className="panel-icon"><Sparkles size={18}/></span><strong>AI Creative Agent</strong><span className="demo-small">DEMO</span><button onClick={()=>setPanel(null)}><X size={17}/></button></div>
           <div className="agent-body">
@@ -1437,7 +1515,15 @@ function Workspace() {
             <label>节点类型<div className="readonly-field">{kindLabels[selected.data.kind]}</div></label>
       {selected.data.kind!=='text'&&selected.data.kind!=='audio'&&<>
               {selected.data.kind==='image'&&
-                <label>生成方式<div className="readonly-field">Muse 生图</div></label>}
+                <label>生成方式<select aria-label="图片节点生成服务"
+                  value={selected.data.provider||'muse'}
+                  onChange={e=>update(selected.id,{
+                    provider:e.target.value as 'muse'|'chatgpt',
+                    model:e.target.value==='chatgpt'?'GPT Image':'Seedream 5.0 Lite'
+                  })}>
+                  <option value="muse">Muse 生图</option>
+                  <option value="chatgpt">ChatGPT 生图</option>
+                </select></label>}
               {selected.data.kind==='video'&&
                 <label>生成方式<select
                   aria-label="节点生成服务"

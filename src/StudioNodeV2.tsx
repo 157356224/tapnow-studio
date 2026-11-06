@@ -204,12 +204,13 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
     '--tn-image-height':imageFrame.height+'px'
   } as CSSProperties:undefined;
   const provider=kind==='video'?(data.provider||'doubao'):
-    kind==='image'?'muse':'demo';
+    kind==='image'?(data.provider||'muse'):'demo';
   // Image-to-image references must work on a newly created image node too:
   // image nodes default to Muse without storing provider in their data yet.
   // Keep the same connected thumbnail and @ ordering UI in demo mode.
   const references=(kind==='video'||kind==='image')?api.referencesFor(id):[];
   const museMode=(kind==='video'||kind==='image')&&provider==='muse';
+  const chatgptMode=kind==='image'&&provider==='chatgpt';
   const h3Mode=kind==='video'&&provider==='h3';
   const account=museMode
     ?api.museAccounts.find(a=>a.id===data.museAccountId)
@@ -460,6 +461,12 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
         role="status" aria-label={data.status==='queued'?'排队等待生成':'正在生成'}
         title={data.jobMessage||'正在生成'} data-generation-status={data.status}>
         <GenerationVisualCanvas nodeId={id}/>
+        {chatgptMode&&data.status==='running'&&
+          typeof data.progress==='number'&&data.progress>0&&
+          <span className="tn-chatgpt-progress" aria-label="ChatGPT生图进度"
+            data-progress={data.progress}>
+            {Math.min(100,Math.round(data.progress))}%
+          </span>}
         {kind==='video'&&provider==='doubao'&&
           <span className="tn-video-generation-stage" aria-live="polite"
             data-video-started={data.status==='running'?'true':'false'}>
@@ -562,8 +569,20 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
         />}
         <div className="tn-compose-footer">
           {kind==='image'&&<div className="tn-provider-switch"
-            role="group" aria-label="生成服务">
-            <button type="button" className="active" aria-pressed="true">Muse 生图</button>
+            role="group" aria-label="图片生成服务">
+            {[{id:'muse',label:'Muse 生图'},
+              {id:'chatgpt',label:'ChatGPT 生图'}].map(item=>
+              <button key={item.id} type="button"
+                className={provider===item.id?'active':''}
+                aria-pressed={provider===item.id}
+                onClick={()=>api.update(id,{
+                  provider:item.id as 'muse'|'chatgpt',
+                  model:item.id==='chatgpt'?'GPT Image':'Seedream 5.0 Lite'
+                })}>{item.label}</button>)}
+          </div>}
+          {chatgptMode&&<div className="tn-account-picker tn-chatgpt-account">
+            <button type="button" title="登录 ChatGPT 独立 Edge 浏览器"
+              onClick={()=>api.openChatGPTSettings()}><LogIn size={14}/> ChatGPT 登录</button>
           </div>}
           {h3Mode&&<div className="tn-account-picker tn-h3-account-entry">
             <button type="button" title="配置元铂AI H3 API Key"
@@ -592,7 +611,7 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
                 onClick={museMode?api.openMuseAccountsSettings:api.openAccountsSettings}>
                 添加账号</button>}
           </div>}
-          {!museMode&&<div className={'tn-combobox'+(kind==='video'?' tn-video-model-picker':'')} ref={modelRef}>
+          {!museMode&&!chatgptMode&&<div className={'tn-combobox'+(kind==='video'?' tn-video-model-picker':'')} ref={modelRef}>
             <button title="选择模型" aria-expanded={showModel}
               onClick={()=>{setShowModel(v=>!v);setShowDuration(false);}}>
               {kind==='video'?<span className="tn-model-symbol"><i/><i/><i/></span>:<Sparkles size={14}/>}
@@ -651,13 +670,15 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
                 </button>)}
               </div>
               {kind==='image'?<>
-                <div className="tn-video-setting-heading">图片分辨率</div>
-                <div className="tn-image-resolutions">
-                  {IMAGE_RESOLUTIONS.map(res=><button key={res}
-                    aria-pressed={(data.resolution||'2K')===res}
-                    className={(data.resolution||'2K')===res?'active':''}
-                    onClick={()=>api.update(id,{resolution:res})}>{res}</button>)}
-                </div>
+                {!chatgptMode&&<>
+                  <div className="tn-video-setting-heading">图片分辨率</div>
+                  <div className="tn-image-resolutions">
+                    {IMAGE_RESOLUTIONS.map(res=><button key={res}
+                      aria-pressed={(data.resolution||'2K')===res}
+                      className={(data.resolution||'2K')===res?'active':''}
+                      onClick={()=>api.update(id,{resolution:res})}>{res}</button>)}
+                  </div>
+                </>}
               </>:<>
                 {h3Mode&&<>
                   <div className="tn-video-setting-heading">H3 视频分辨率</div>
@@ -705,6 +726,7 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
               role="status" aria-label="本次生成积分估算"
               title={h3Mode
                 ?costError||'按元铂AI当前 /models 售价估算，最终扣费以平台账单为准'
+                :chatgptMode?'ChatGPT 网页账号使用额度以官方页面为准'
                 :'该平台未提供可核对的统一积分价格，不能按元铂AI积分计价'}>
               {h3Mode&&costQuote
                 ?<>预计 <strong>{costQuote.credits.toLocaleString('zh-CN',{
@@ -712,7 +734,8 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
                 })} 积分</strong> <small>¥{costQuote.yuan.toFixed(
                   costQuote.credits%1===0?2:3
                 )}</small></>
-                :<span>{h3Mode?(costLoading?'计算积分中…':'积分待查询'):'积分：—'}</span>}
+                :<span>{h3Mode?(costLoading?'计算积分中…':'积分待查询'):
+                  chatgptMode?'ChatGPT 额度':'积分：—'}</span>}
             </span>}
             <button className="tn-submit" title={h3Mode?'使用元铂AI H3 生成视频':
               museMode?'使用 Muse 生成'+(kind==='video'?'视频':'图片'):
