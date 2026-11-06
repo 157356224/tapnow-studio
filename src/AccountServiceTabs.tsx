@@ -1,6 +1,6 @@
 type Props={
-  active:'doubao'|'muse';
-  onSwitch:(provider:'doubao'|'muse')=>void;
+  active:'doubao'|'muse'|'chatgpt';
+  onSwitch:(provider:'doubao'|'muse'|'chatgpt')=>void;
 };
 
 export function AccountServiceTabs({active,onSwitch}:Props){
@@ -11,5 +11,8 @@ export function AccountServiceTabs({active,onSwitch}:Props){
     <button type="button" aria-pressed={active==='muse'}
       className={active==='muse'?'active':''}
       onClick={()=>onSwitch('muse')}>Muse 账号</button>
+    <button type="button" aria-pressed={active==='chatgpt'}
+      className={active==='chatgpt'?'active':''}
+      onClick={()=>onSwitch('chatgpt')}>ChatGPT 账号</button>
   </div>;
 }

@@ -14,7 +14,11 @@ const project={
         prompt:'参考场景',ratio:'2:3',resolution:'2K',status:'idle'}}
   ],edges:[]
 };
-const errors=[];let submitted=0,polls=0;
+const errors=[];let submitted=0,polls=0,nativeLogins=0;
+const accounts=[{
+  id:'account-one',name:'ChatGPT 账号 01',
+  createdAt:now,browserEngine:'edge',profileCreated:true,nativeBrowserOpen:false
+}];
 const browser=await chromium.launch({channel:'msedge',headless:true});
 const page=await browser.newPage({viewport:{width:1750,height:980}});
 page.setDefaultTimeout(10000);
@@ -38,10 +42,27 @@ try{
     if(pathname==='/api/chatgpt/account')return send(route,{
       profileCreated:true,loginWindowOpen:false,browserOpen:false,jobsRunning:0
     });
+    if(pathname==='/api/chatgpt/accounts'){
+      if(req.method()==='POST'){
+        const name=req.postDataJSON().name;
+        const created={
+          id:'account-two',name,createdAt:now,browserEngine:'edge',
+          profileCreated:false,nativeBrowserOpen:false
+        };
+        accounts.push(created);
+        return send(route,created,201);
+      }
+      return send(route,accounts);
+    }
+    if(pathname==='/api/chatgpt/accounts/account-two/native-login'){
+      nativeLogins++;
+      return send(route,{ok:true,message:'独立 Edge 浏览器已打开'});
+    }
     if(pathname==='/api/chatgpt/jobs'&&req.method()==='POST'){
       const body=req.postDataJSON();
       assert.equal(body.nodeId,'chatgpt-image');
       assert.equal(body.prompt,'画一只橘猫');
+      assert.equal(body.accountId,'account-two');
       submitted++;
       return send(route,{id:'mock-chatgpt-job',status:'queued',
         progress:null,message:'任务已排队'},202);
@@ -76,7 +97,21 @@ try{
   await bar.getByRole('button',{name:'ChatGPT 生图'}).click();
   assert.equal(await bar.getByRole('button',{name:'ChatGPT 生图'}).getAttribute('aria-pressed'),
     'true');
-  assert.ok(await compose.getByRole('button',{name:/ChatGPT 登录/}).count());
+  await compose.getByRole('button',{name:/添加账号|管理账号/}).click();
+  const panel=page.locator('.right-panel');
+  await panel.getByRole('group',{name:'账号服务选择'}).waitFor();
+  const tabColumns=await panel.getByRole('group',{name:'账号服务选择'})
+    .evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length);
+  assert.equal(tabColumns,3,'Account switcher must show three columns');
+  assert.ok(await panel.getByRole('button',{name:'ChatGPT 账号',exact:true})
+    .getAttribute('aria-pressed')==='true');
+  await panel.getByRole('textbox',{name:'ChatGPT 账号备注'}).fill('ChatGPT 账号 02');
+  await panel.getByRole('button',{name:/创建账号并打开浏览器登录/}).click();
+  await panel.getByText('ChatGPT 账号 02',{exact:true}).waitFor();
+  assert.equal(nativeLogins,1,'Creating a ChatGPT account must invoke native Edge login');
+  await panel.getByRole('button',{name:'关闭'}).first().click();
+  await compose.getByRole('combobox',{name:'ChatGPT 生成账号'})
+    .selectOption('account-two');
   assert.equal(await page.locator(
     '.react-flow__node[data-id="muse-image"] .tn-media').count(),0);
   await compose.locator('.tn-submit').click();
@@ -107,5 +142,5 @@ try{
   assert.equal(project.nodes.find(n=>n.id==='muse-image').data.provider,'muse',
     'Existing Muse provider should be preserved');
   assert.deepEqual(errors,[]);
-  console.log('PASS: image node Muse/ChatGPT switch, ChatGPT login entry, exact 70% badge and completed canvas media, Muse unaffected');
+  console.log('PASS: Muse/ChatGPT switch, shared account-management panel, account creation auto-opens native Edge, selected ChatGPT account, 70% and original media');
 }finally{await browser.close();}

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import {EventEmitter} from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -81,9 +82,23 @@ let projects=[project];
 const app=express();app.use(express.json());
 const hosts=['127.0.0.1:3701'];
 const fakeContext={pages:()=>[{isClosed:()=>false}],on:()=>{},close:async()=>{}};
+let launchedProfile=null;
+let nativeChild=null;
 mountChatGPTRoutes(app,()=>projects,items=>{projects=items;},{
   dataDir,uploadDir,allowedHosts:hosts,
-  launch:async()=>fakeContext,
+  launch:async account=>{
+    assert.ok(account?.id);
+    return fakeContext;
+  },
+  loginLauncher:account=>{
+    launchedProfile=path.join(dataDir,'chatgpt-profiles',account.id+'-edge');
+    const child=new EventEmitter();
+    child.exitCode=null;
+    child.unref=()=>{};
+    nativeChild=child;
+    process.nextTick(()=>child.emit('spawn'));
+    return child;
+  },
   runner:async({job,outputDir,onProgress})=>{
     assert.equal(job.prompt,'一只猫');
     assert.equal(outputDir,uploadDir);
@@ -106,9 +121,31 @@ const api=async(url,init={})=>{
   return {status:response.status,body:await response.json()};
 };
 try{
+  const added=await api('/api/chatgpt/accounts',{
+    method:'POST',body:JSON.stringify({name:'测试 ChatGPT 01'})
+  });
+  assert.equal(added.status,201,JSON.stringify(added.body));
+  assert.equal(added.body.name,'测试 ChatGPT 01');
+  assert.equal((await api('/api/chatgpt/accounts')).body.length,1);
+  const opened=await api('/api/chatgpt/accounts/'+added.body.id+'/native-login',{
+    method:'POST',body:JSON.stringify({browserEngine:'edge'})
+  });
+  assert.equal(opened.status,200,JSON.stringify(opened.body));
+  assert.ok(fs.existsSync(launchedProfile),
+    'Creating account and clicking Login must prepare a real isolated Edge profile');
+  assert.equal((await api('/api/chatgpt/accounts')).body[0].nativeBrowserOpen,true);
+  nativeChild.exitCode=0;
+  nativeChild.emit('exit',0);
+  assert.equal((await api('/api/chatgpt/accounts')).body[0].nativeBrowserOpen,false);
+  const second=await api('/api/chatgpt/accounts',{
+    method:'POST',body:JSON.stringify({name:'测试 ChatGPT 02'})
+  });
+  assert.equal(second.status,201);
+  assert.notEqual(second.body.id,added.body.id);
   const accepted=await api('/api/chatgpt/jobs',{
     method:'POST',body:JSON.stringify({
-      projectId:project.id,nodeId:'image-node',references:[]
+      projectId:project.id,nodeId:'image-node',
+      accountId:added.body.id,references:[]
     })
   });
   assert.equal(accepted.status,202,JSON.stringify(accepted.body));
@@ -119,6 +156,7 @@ try{
     if(final.status==='completed')break;
   }
   assert.equal(final.status,'completed',JSON.stringify(final));
+  assert.equal(final.accountId,added.body.id);
   assert.equal(final.progress,100);
   assert.equal(projects[0].nodes[0].data.mediaUrl,final.mediaUrl);
   assert.equal(projects[0].nodes[0].data.status,'done');
@@ -133,6 +171,14 @@ try{
     })
   });
   assert.equal(invalid.status,400);
+  const removed=await api('/api/chatgpt/accounts/'+second.body.id,{
+    method:'DELETE'
+  });
+  assert.equal(removed.status,200);
+  assert.equal((await api('/api/chatgpt/accounts')).body.length,1);
+  assert.ok(!fs.existsSync(path.join(dataDir,'chatgpt-profiles',
+    second.body.id+'-edge')));
+  console.log('PASS: create 2 named ChatGPT Edge accounts, native login launch, profile isolation, account choice, delete');
   console.log('PASS: ChatGPT job API, real progress persistence, image canvas backfill, stale autosave protection');
 }finally{
   await new Promise(resolve=>server.close(resolve));

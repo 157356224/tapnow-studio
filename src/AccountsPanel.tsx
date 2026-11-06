@@ -7,7 +7,7 @@ type Props={
   accounts:DoubaoAccount[];
   refresh:()=>Promise<void>;
   onClose:()=>void;
-  onSwitch:(provider:'doubao'|'muse')=>void;
+  onSwitch:(provider:'doubao'|'muse'|'chatgpt')=>void;
 };
 
 async function api(route:string,init:RequestInit){

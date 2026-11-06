@@ -7,7 +7,7 @@ type Props={
   accounts:MuseAccount[];
   refresh:()=>Promise<void>;
   onClose:()=>void;
-  onSwitch:(provider:'doubao'|'muse')=>void;
+  onSwitch:(provider:'doubao'|'muse'|'chatgpt')=>void;
 };
 async function request<T>(route:string,init?:RequestInit):Promise<T>{
   const res=await fetch(route,init);

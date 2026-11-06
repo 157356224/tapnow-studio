@@ -31,6 +31,7 @@ import {MuseQuotaButton} from './MuseQuotaButton';
 import {H3SettingsPanel} from './H3SettingsPanel';
 import {VideoFrameEditor} from './VideoFrameEditor';
 import {ChatGPTPanel} from './ChatGPTPanel';
+import type {ChatGPTAccount} from './chatgpt';
 import type {MuseAccount,MuseJob,MuseQuotaSummary} from './muse';
 import type { Kind, Project, ProjectSummary, StudioEdge, StudioNode, StudioNodeData } from './types';
 
@@ -124,6 +125,7 @@ function Workspace() {
   const [showTemplates, setShowTemplates] = useState(false);
   const [doubaoAccounts, setDoubaoAccounts] = useState<DoubaoAccount[]>([]);
   const [museAccounts,setMuseAccounts]=useState<MuseAccount[]>([]);
+  const [chatgptAccounts,setChatgptAccounts]=useState<ChatGPTAccount[]>([]);
   const [museQuota,setMuseQuota]=useState<MuseQuotaSummary|null>(null);
   const [museQuotaLoading,setMuseQuotaLoading]=useState(false);
   const [museQuotaError,setMuseQuotaError]=useState('');
@@ -200,6 +202,10 @@ function Workspace() {
     try{setMuseAccounts(await request<MuseAccount[]>('/api/muse/accounts'));}
     catch{setMuseAccounts([]);}
   },[]);
+  const refreshChatGPTAccounts=useCallback(async()=>{
+    try{setChatgptAccounts(await request<ChatGPTAccount[]>('/api/chatgpt/accounts'));}
+    catch{setChatgptAccounts([]);}
+  },[]);
   const refreshMuseQuota=useCallback(async(force=false)=>{
     setMuseQuotaLoading(true);
     try{
@@ -230,6 +236,11 @@ function Workspace() {
     const timer=setInterval(()=>void refreshMuseAccounts(),60000);
     return ()=>clearInterval(timer);
   },[refreshMuseAccounts]);
+  useEffect(()=>{
+    void refreshChatGPTAccounts();
+    const timer=setInterval(()=>void refreshChatGPTAccounts(),60000);
+    return ()=>clearInterval(timer);
+  },[refreshChatGPTAccounts]);
   useEffect(()=>{
     void refreshMuseQuota();
     const timer=setInterval(()=>void refreshMuseQuota(),60000);
@@ -621,11 +632,17 @@ function Workspace() {
           source.data.referenceIds||[],referencesFor(id));
       }catch(error){notify((error as Error).message);return;}
       try{
-        const account=await request<{loginWindowOpen:boolean;profileCreated:boolean}>(
-          '/api/chatgpt/account');
-        if(account.loginWindowOpen||!account.profileCreated){
+        const accounts=await request<ChatGPTAccount[]>('/api/chatgpt/accounts');
+        setChatgptAccounts(accounts);
+        const preferred=source.data.chatgptAccountId||'auto';
+        const account=preferred==='auto'
+          ?accounts.find(item=>!item.nativeBrowserOpen)||accounts[0]
+          :accounts.find(item=>item.id===preferred);
+        if(!account||account.nativeBrowserOpen){
           setPanel('chatgpt');
-          notify('请先打开独立 Edge 登录 ChatGPT，并在登录后关闭窗口');
+          notify(!accounts.length?'请先创建 ChatGPT 浏览器账号并登录':
+            !account?'所选 ChatGPT 账号已不存在，请重新选择':
+              '请先关闭该 ChatGPT 账号的 Edge 登录窗口');
           return;
         }
         if(timer.current)clearTimeout(timer.current);
@@ -644,6 +661,7 @@ function Workspace() {
           ?{...item,updatedAt:saved.updatedAt}:item));
         const job=await request<ChatGPTImageJob>('/api/chatgpt/jobs',JSONBody({
           projectId,nodeId:id,prompt:source.data.prompt,
+          accountId:account.id,
           references:refs.map(ref=>({id:ref.id}))
         }));
         update(id,{jobId:job.id,status:'queued',progress:0,jobMessage:job.message});
@@ -968,7 +986,8 @@ function Workspace() {
     update,generate,addAfter,addBefore,uploadFor,extractLastFrame,
     openFrameEditor,duplicate,remove,expand,inspect,
     openNodeMenu:(id:string,side:'source'|'target',x:number,y:number)=>openNodeMenu(id,side,x,y),
-    accounts:doubaoAccounts,museAccounts,referencesFor,reorderReferences,
+    accounts:doubaoAccounts,museAccounts,chatgptAccounts,
+    referencesFor,reorderReferences,
     openAccountsSettings:()=>setPanel('doubao'),
     openMuseAccountsSettings:()=>setPanel('muse'),
     openH3Settings:()=>setPanel('h3'),
@@ -976,7 +995,8 @@ function Workspace() {
     openAccountBrowser,openMuseAccountBrowser
   }),[update,generate,addAfter,addBefore,openNodeMenu,uploadFor,extractLastFrame,
     openFrameEditor,duplicate,remove,
-    expand,inspect,doubaoAccounts,museAccounts,referencesFor,reorderReferences,
+    expand,inspect,doubaoAccounts,museAccounts,chatgptAccounts,
+    referencesFor,reorderReferences,
     openAccountBrowser,openMuseAccountBrowser]);
   const selected=nodes.find(n=>n.selected) || null;
   const frameEditorSource=frameEditorId
@@ -1467,7 +1487,9 @@ function Workspace() {
         {panel==='muse'&&<MuseAccountsPanel accounts={museAccounts}
           refresh={refreshMuseAccounts} onClose={()=>setPanel(null)} onSwitch={setPanel}/>}
         {panel==='h3'&&<H3SettingsPanel onClose={()=>setPanel(null)}/>}
-        {panel==='chatgpt'&&<ChatGPTPanel onClose={()=>setPanel(null)}/>}
+        {panel==='chatgpt'&&<ChatGPTPanel accounts={chatgptAccounts}
+          refresh={refreshChatGPTAccounts}
+          onClose={()=>setPanel(null)} onSwitch={setPanel}/>}
         {panel==='agent' && <>
           <div className="panel-topline"><span className="panel-icon"><Sparkles size={18}/></span><strong>AI Creative Agent</strong><span className="demo-small">DEMO</span><button onClick={()=>setPanel(null)}><X size={17}/></button></div>
           <div className="agent-body">
@@ -1616,6 +1638,17 @@ function Workspace() {
                   <button className="doubao-quick-settings" onClick={()=>setPanel('muse')}>
                     管理 Muse 账号
                   </button>
+                </label>}
+              {selected.data.kind==='image'&&selected.data.provider==='chatgpt'&&
+                <label>ChatGPT 独立浏览器账号
+                  <select aria-label="ChatGPT 生成账号"
+                    value={selected.data.chatgptAccountId||'auto'}
+                    onChange={e=>update(selected.id,{chatgptAccountId:e.target.value})}>
+                    <option value="auto">自动选择空闲账号</option>
+                    {chatgptAccounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}
+                  </select>
+                  <button className="doubao-quick-settings"
+                    onClick={()=>setPanel('chatgpt')}>管理 ChatGPT 账号</button>
                 </label>}
               <label>生成提示词<textarea rows={8} value={selected.data.prompt} onChange={e=>update(selected.id,{prompt:e.target.value})}/></label>
             </>}

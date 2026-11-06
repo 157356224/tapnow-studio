@@ -10,6 +10,7 @@ import {
 import type { Kind, StudioNode, StudioNodeData } from './types';
 import type { DoubaoAccount, ReferenceNode } from './doubao';
 import type {MuseAccount} from './muse';
+import type {ChatGPTAccount} from './chatgpt';
 import { kindEnglish, kindLabels, models } from './sample';
 
 type Actions = {
@@ -27,6 +28,7 @@ type Actions = {
   inspect: (id: string) => void;
   accounts: DoubaoAccount[];
   museAccounts: MuseAccount[];
+  chatgptAccounts: ChatGPTAccount[];
   referencesFor: (id: string) => ReferenceNode[];
   reorderReferences: (nodeId:string,referenceId:string,direction:-1|1,currentPrompt?:string)=>void;
   openAccountsSettings: () => void;

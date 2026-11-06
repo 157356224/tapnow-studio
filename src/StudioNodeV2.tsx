@@ -581,8 +581,17 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
                 })}>{item.label}</button>)}
           </div>}
           {chatgptMode&&<div className="tn-account-picker tn-chatgpt-account">
-            <button type="button" title="登录 ChatGPT 独立 Edge 浏览器"
-              onClick={()=>api.openChatGPTSettings()}><LogIn size={14}/> ChatGPT 登录</button>
+            <select aria-label="ChatGPT 生成账号" title="ChatGPT 独立 Edge 浏览器账号"
+              value={data.chatgptAccountId||'auto'}
+              onChange={e=>api.update(id,{chatgptAccountId:e.target.value})}>
+              <option value="auto">自动选择空闲账号</option>
+              {api.chatgptAccounts.map(account=>
+                <option key={account.id} value={account.id}>{account.name}</option>)}
+            </select>
+            <button type="button" title="添加或登录 ChatGPT 独立 Edge 浏览器账号"
+              onClick={()=>api.openChatGPTSettings()}>
+              <LogIn size={14}/>{api.chatgptAccounts.length?'管理账号':'添加账号'}
+            </button>
           </div>}
           {h3Mode&&<div className="tn-account-picker tn-h3-account-entry">
             <button type="button" title="配置元铂AI H3 API Key"

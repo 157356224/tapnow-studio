@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {chromium} from 'playwright';
-import {browserLaunchOptions,nativeBrowserExecutable} from './chromium-binary.mjs';
+import {browserLaunchOptions,nativeBrowserExecutable,accountProfileDir} from './chromium-binary.mjs';
 import {projectImageReferences,localReferenceFile} from './reference-selection.mjs';
 import {runChatGPTBrowser} from './chatgpt-runner.mjs';
 import {setMuseProjectJob} from './muse-project.mjs';
@@ -43,26 +43,39 @@ export function preserveChatGPTCompletedMedia(oldProject,incomingNodes){
 export function mountChatGPTRoutes(app,readProjects,writeProjects,{
   dataDir,uploadDir,
   runner=runChatGPTBrowser,
-  launch=()=>chromium.launchPersistentContext(profileDir(),{
-    headless:false,acceptDownloads:true,
-    viewport:{width:1400,height:950},
-    ...browserLaunchOptions(),
-    args:['--no-first-run','--no-default-browser-check',
-      '--disable-background-mode']
-  }),
-  loginLauncher=()=>spawn(nativeBrowserExecutable(),[
-    '--user-data-dir='+profileDir(),
-    '--new-window','--no-first-run','--no-default-browser-check',
-    '--disable-background-mode','https://chatgpt.com/'
-  ],{detached:true,stdio:'ignore',windowsHide:false}),
+  launch=null,
+  loginLauncher=null,
   enableBrowser=true,
   allowedHosts=['localhost:3701','127.0.0.1:3701']
 }){
-  const profileDir=()=>path.join(dataDir,'chatgpt-edge-profile');
+  const profilesDir=path.join(dataDir,'chatgpt-profiles');
+  const accountsFile=path.join(dataDir,'chatgpt-accounts.json');
+  const legacyProfileDir=path.join(dataDir,'chatgpt-edge-profile');
+  const profileDir=account=>account.legacyProfile
+    ?legacyProfileDir:accountProfileDir(profilesDir,account);
+  const startAutomation=launch||((account)=>
+    chromium.launchPersistentContext(profileDir(account),{
+      headless:false,acceptDownloads:true,
+      viewport:{width:1400,height:950},
+      ...browserLaunchOptions(),
+      args:['--no-first-run','--no-default-browser-check',
+        '--disable-background-mode']
+    }));
+  const startNativeLogin=loginLauncher||((account)=>
+    spawn(nativeBrowserExecutable(),[
+      '--user-data-dir='+profileDir(account),
+      '--new-window','--no-first-run','--no-default-browser-check',
+      '--disable-background-mode','https://chatgpt.com/'
+    ],{detached:true,stdio:'ignore',windowsHide:false}));
   const jobsFile=path.join(dataDir,'chatgpt-image-jobs.json');
   fs.mkdirSync(dataDir,{recursive:true});
   fs.mkdirSync(uploadDir,{recursive:true});
+  fs.mkdirSync(profilesDir,{recursive:true});
+  if(!fs.existsSync(accountsFile))writeJson(accountsFile,[]);
   if(!fs.existsSync(jobsFile))writeJson(jobsFile,[]);
+  const accounts=()=>JSON.parse(fs.readFileSync(accountsFile,'utf8'));
+  const findAccount=id=>accounts().find(account=>account.id===id);
+  const nativeBrowsers=new Map();
   const jobs=new Map();
   try{
     for(const job of JSON.parse(fs.readFileSync(jobsFile,'utf8'))){
@@ -74,7 +87,7 @@ export function mountChatGPTRoutes(app,readProjects,writeProjects,{
       jobs.set(job.id,job);
     }
   }catch{}
-  let browser=null,loginProcess=null,queueTail=Promise.resolve();
+  let browser=null,browserAccountId=null,queueTail=Promise.resolve();
   const active=new Set();
   const persist=(job,patch)=>{
     const changed=setMuseProjectJob(readProjects(),job,patch);
@@ -98,16 +111,33 @@ export function mountChatGPTRoutes(app,readProjects,writeProjects,{
       });
     }
   };
-  const loginOpen=()=>loginProcess?.exitCode===null;
+  const loginOpen=id=>{
+    const child=nativeBrowsers.get(id);
+    return !!child&&child.exitCode===null;
+  };
+  const accountPublic=account=>({
+    id:account.id,name:account.name,createdAt:account.createdAt,
+    browserEngine:'edge',profileCreated:fs.existsSync(profileDir(account)),
+    nativeBrowserOpen:loginOpen(account.id)
+  });
   const busy=()=>active.size>0||
     [...jobs.values()].some(j=>['queued','starting','running'].includes(j.status));
-  const ensureBrowser=async()=>{
+  const ensureBrowser=async(accountId)=>{
     if(!enableBrowser)throw new Error('ChatGPT 浏览器功能未启用');
-    if(loginOpen())
+    const account=findAccount(accountId);
+    if(!account)throw new Error('ChatGPT 账号不存在，请重新添加');
+    if(loginOpen(accountId))
       throw new Error('请先在独立 Edge 登录 ChatGPT，并关闭登录窗口后再生成');
+    if(browser&&browserAccountId!==accountId){
+      await browser.close();
+      browser=null;browserAccountId=null;
+    }
     if(!browser){
-      browser=await launch();
-      browser.on?.('close',()=>{browser=null;});
+      browser=await startAutomation(account);
+      browserAccountId=accountId;
+      browser.on?.('close',()=>{
+        browser=null;browserAccountId=null;
+      });
     }
     const page=browser.pages().find(p=>!p.isClosed())||
       await browser.newPage();
@@ -118,7 +148,7 @@ export function mountChatGPTRoutes(app,readProjects,writeProjects,{
     try{
       update(job,{status:'starting',progress:null,
         message:'正在打开 ChatGPT 独立 Edge 浏览器'});
-      const page=await ensureBrowser();
+      const page=await ensureBrowser(job.accountId);
       const refs=job.references.map(ref=>({
         ...ref,file:localReferenceFile(uploadDir,ref.url)
       }));
@@ -139,7 +169,7 @@ export function mountChatGPTRoutes(app,readProjects,writeProjects,{
     }finally{
       active.delete(job.id);
       if(browser){
-        const context=browser;browser=null;
+        const context=browser;browser=null;browserAccountId=null;
         await context.close().catch(()=>{});
       }
     }
@@ -159,28 +189,81 @@ export function mountChatGPTRoutes(app,readProjects,writeProjects,{
     next();
   };
   app.use('/api/chatgpt',originGuard);
-  app.get('/api/chatgpt/account',(_req,res)=>res.json({
-    profileCreated:fs.existsSync(profileDir()),
-    loginWindowOpen:!!loginOpen(),browserOpen:!!browser,
-    jobsRunning:active.size
-  }));
-  app.post('/api/chatgpt/login',async(_req,res)=>{
+  app.get('/api/chatgpt/accounts',(_req,res)=>
+    res.json(accounts().map(accountPublic)));
+  const openLogin=async(account)=>{
+    if(busy())throw new Error('请等待 ChatGPT 生图任务结束后再打开登录浏览器');
+    if(loginOpen(account.id))
+      return {ok:true,message:'该 ChatGPT 账号的 Edge 登录窗口已打开'};
+    if(browser){
+      await browser.close();
+      browser=null;browserAccountId=null;
+    }
+    fs.mkdirSync(profileDir(account),{recursive:true});
+    const child=startNativeLogin(account);
+    await new Promise((resolve,reject)=>{
+      child.once('spawn',resolve);
+      child.once('error',reject);
+    });
+    child.unref?.();
+    nativeBrowsers.set(account.id,child);
+    child.once('exit',()=>{
+      if(nativeBrowsers.get(account.id)===child)
+        nativeBrowsers.delete(account.id);
+    });
+    return {ok:true,browserEngine:'edge',
+      message:'已打开 '+account.name+' 的独立 Microsoft Edge。请在 ChatGPT 网页手动登录，完成后关闭窗口。'};
+  };
+  app.post('/api/chatgpt/accounts', (req,res)=>{
     try{
-      if(busy())return res.status(409).json({
-        error:'请先等待 ChatGPT 生图任务结束后再打开登录窗口'});
-      if(loginOpen())return res.json({ok:true,
-        message:'ChatGPT 登录 Edge 已打开，请使用现有窗口'});
-      if(browser){await browser.close();browser=null;}
-      fs.mkdirSync(profileDir(),{recursive:true});
-      const child=loginLauncher();
-      await new Promise((resolve,reject)=>{
-        child.once('spawn',resolve);child.once('error',reject);
-      });
-      child.unref?.();
-      loginProcess=child;
-      child.once('exit',()=>{if(loginProcess===child)loginProcess=null;});
-      res.json({ok:true,
-        message:'已打开 ChatGPT 独立 Edge，请手动登录并关闭该窗口，再回到画布生成'});
+      const name=String(req.body?.name||'').trim();
+      if(!name||name.length>60)throw new Error('请输入 1–60 字的账号备注');
+      const existing=accounts();
+      const account={id:crypto.randomUUID(),name,createdAt:now(),
+        browserEngine:'edge',
+        // Reuse the pre-existing single-account profile on the first migration.
+        ...(existing.length===0&&fs.existsSync(legacyProfileDir)
+          ?{legacyProfile:true}:{})};
+      existing.push(account);writeJson(accountsFile,existing);
+      res.status(201).json(accountPublic(account));
+    }catch(error){res.status(400).json({error:String(error.message||error)})}
+  });
+  app.post('/api/chatgpt/accounts/:id/native-login',async(req,res)=>{
+    try{
+      const account=validId(req.params.id)&&findAccount(req.params.id);
+      if(!account)return res.status(404).json({error:'ChatGPT 账号不存在'});
+      res.json(await openLogin(account));
+    }catch(error){res.status(400).json({error:String(error.message||error)})}
+  });
+  app.delete('/api/chatgpt/accounts/:id',async(req,res)=>{
+    try{
+      const account=validId(req.params.id)&&findAccount(req.params.id);
+      if(!account)return res.status(404).json({error:'ChatGPT 账号不存在'});
+      if(loginOpen(account.id)||active.has(account.id)||
+        [...jobs.values()].some(job=>job.accountId===account.id&&
+          ['queued','starting','running'].includes(job.status)))
+        return res.status(409).json({error:'请先关闭该账号登录窗口并完成生成任务'});
+      if(browser&&browserAccountId===account.id){
+        await browser.close();
+        browser=null;browserAccountId=null;
+      }
+      writeJson(accountsFile,accounts().filter(item=>item.id!==account.id));
+      fs.rmSync(profileDir(account),{recursive:true,force:true});
+      res.json({ok:true});
+    }catch(error){res.status(400).json({error:String(error.message||error)})}
+  });
+  app.get('/api/chatgpt/account',(_req,res)=>res.json({
+    profileCreated:accounts().length>0,
+    loginWindowOpen:accounts().some(item=>loginOpen(item.id)),
+    browserOpen:!!browser,jobsRunning:active.size,
+    accountCount:accounts().length
+  }));
+  app.post('/api/chatgpt/login',async(req,res)=>{
+    try{
+      const list=accounts();
+      const account=list.find(item=>item.id===req.body?.accountId)||list[0];
+      if(!account)throw new Error('请先添加 ChatGPT 浏览器账号');
+      res.json(await openLogin(account));
     }catch(err){res.status(400).json({error:String(err.message||err)})}
   });
   app.get('/api/chatgpt/jobs/:id',(req,res)=>{
@@ -198,6 +281,13 @@ export function mountChatGPTRoutes(app,readProjects,writeProjects,{
       const prompt=String(req.body?.prompt||node.data.prompt||'').trim();
       if(!prompt||prompt.length>32000)
         throw new Error('请输入 1–32000 字符的 ChatGPT 生图提示词');
+      const all=accounts();
+      if(!all.length)throw new Error('请先创建 ChatGPT 独立浏览器账号');
+      const preferred=req.body?.accountId||node.data.chatgptAccountId||'auto';
+      const account=preferred==='auto'
+        ?all.find(item=>!loginOpen(item.id))||all[0]
+        :all.find(item=>item.id===preferred);
+      if(!account)throw new Error('指定的 ChatGPT 浏览器账号不存在');
       const refs=projectImageReferences(project,nodeId,prompt,
         req.body?.references||[]);
       for(const ref of refs)
@@ -205,7 +295,7 @@ export function mountChatGPTRoutes(app,readProjects,writeProjects,{
           throw new Error('请先上传引用的本地图片：'+ref.name);
       const job={
         id:crypto.randomUUID(),projectId,nodeId,kind:'image',
-        prompt,references:refs,
+        accountId:account.id,prompt,references:refs,
         ratio:String(node.data.ratio||'2:3'),
         status:'queued',progress:null,
         message:'ChatGPT 生图任务已排队',

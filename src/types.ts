@@ -13,6 +13,7 @@ export type StudioNodeData = Record<string, unknown> & {
   model?: string;
   provider?: 'doubao'|'muse'|'h3'|'chatgpt'|'demo';
   museAccountId?: string;
+  chatgptAccountId?: string;
   ratio?: string;
   resolution?: string;
   duration?: string;

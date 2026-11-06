@@ -148,8 +148,8 @@
 .muse-quota-unavailable{color:#e0bd99}
 .muse-quota-empty{margin:10px 0;font-size:11px;color:#a5a8b6;line-height:1.6}
 
-/* Account provider switcher, shared by Doubao and Muse panels. */
-.tn-account-service-tabs{display:grid;grid-template-columns:1fr 1fr;gap:7px;
+/* Account provider switcher, shared by Doubao, Muse and ChatGPT panels. */
+.tn-account-service-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;
   padding:11px 17px 0;flex:0 0 auto;background:#1c1c20}
 .tn-account-service-tabs button{border:1px solid #3d3e46;border-radius:9px;
   background:#292a30;color:#b9bac5;padding:11px 7px;font-size:12px;cursor:pointer}
