@@ -121,8 +121,8 @@ const inputSelector='#prompt-textarea,[data-testid="composer-input"][contentedit
   '[contenteditable="true"][role="textbox"],textarea[placeholder*="Message"],'+
   'textarea[placeholder*="消息"]';
 
-// The ChatGPT composer may mount its file input only after the plus button
-// opens. The native input's FileList is NOT proof of an accepted attachment:
+// ChatGPT accepts image drops on its composer even when no file input is
+// mounted. The native input's FileList is NOT proof of an accepted attachment:
 // ChatGPT often clears it before an asynchronous upload finishes.
 async function composerAttachmentState(page,filenames=[]){
   return page.evaluate(({inputSelector,filenames})=>{
@@ -177,53 +177,49 @@ async function chatGPTImageInputs(page){
 }
 
 async function chooseChatGPTFile(page,file){
-  let inputs=await chatGPTImageInputs(page);
+  const inputs=await chatGPTImageInputs(page);
   if(inputs.length){
     // Do not call setInputFiles([]): React may interpret that as removing an
-    // existing reference. Reusing the same input for another file is safe.
+    // existing reference. This works like Muse's direct hidden-input upload.
     await inputs[0].setInputFiles(file,{timeout:20000});
     return;
   }
-  const plusButtons=[
-    page.locator('[data-testid="composer-plus-btn"]'),
-    page.getByRole('button',{name:/^(?:attach|add files|add photos|添加|附件|上传|更多)(?:\s|$)/i}),
-    page.locator('button[aria-label*="Attach"],button[aria-label*="Upload"],'+
-      'button[aria-label*="附件"],button[aria-label*="上传"]')
-  ];
-  let opened=false;
-  for(const group of plusButtons){
-    for(let i=0,n=Math.min(await group.count(),12);i<n;i++){
-      const button=group.nth(i);
-      if(!await button.isVisible().catch(()=>false))continue;
-      await button.click({timeout:5000});
-      opened=true;
-      break;
+  // The user's normal workflow is dropping a local image directly into
+  // ChatGPT. Dispatch a browser-native File/DataTransfer through the same
+  // HTML5 drop event path; never click or open the plus/attachment menu.
+  const name=path.basename(file);
+  const mime=/\.png$/i.test(name)?'image/png':
+    /\.webp$/i.test(name)?'image/webp':'image/jpeg';
+  const data=fs.readFileSync(file).toString('base64');
+  const transfer=await page.evaluateHandle(({name,mime,data})=>{
+    const decoded=atob(data);
+    const bytes=new Uint8Array(decoded.length);
+    for(let i=0;i<decoded.length;i++)bytes[i]=decoded.charCodeAt(i);
+    const transfer=new DataTransfer();
+    transfer.items.add(new File([bytes],name,{type:mime}));
+    return transfer;
+  },{name,mime,data});
+  try{
+    const editor=page.locator(inputSelector).first();
+    await editor.dispatchEvent('dragenter',{dataTransfer:transfer});
+    await editor.dispatchEvent('dragover',{dataTransfer:transfer});
+    // The page can expose a drag-overlay after dragenter. Drop there when
+    // present, otherwise drop on the composer so bubbling reaches its handler.
+    const zone=page.locator(
+      '[data-testid*="dropzone"],[data-testid*="drop-zone"],'+
+      '[data-testid*="file-drop"],[data-testid*="upload-drop"]'
+    );
+    let target=editor;
+    for(let i=0,n=Math.min(await zone.count(),12);i<n;i++){
+      const candidate=zone.nth(i);
+      if(await candidate.isVisible().catch(()=>false)){
+        target=candidate;break;
+      }
     }
-    if(opened)break;
+    await target.dispatchEvent('drop',{dataTransfer:transfer});
+  }finally{
+    await transfer.dispose();
   }
-  if(!opened)throw new Error('ChatGPT 当前输入框找不到“+”附件上传入口');
-  inputs=await chatGPTImageInputs(page);
-  if(inputs.length){
-    await inputs[0].setInputFiles(file,{timeout:20000});
-    return;
-  }
-  const item=page.getByRole('menuitem',{name:/照片|图片|文件|上传|photo|image|file|upload/i})
-    .or(page.getByRole('button',{name:/^(?:upload|add photos|add files|上传文件|添加照片|上传照片)/i}));
-  for(let i=0,n=Math.min(await item.count(),15);i<n;i++){
-    const target=item.nth(i);
-    if(!await target.isVisible().catch(()=>false))continue;
-    const chooserPromise=page.waitForEvent('filechooser',{timeout:4000})
-      .catch(()=>null);
-    await target.click({timeout:5000});
-    const chooser=await chooserPromise;
-    if(chooser){await chooser.setFiles(file);return;}
-    inputs=await chatGPTImageInputs(page);
-    if(inputs.length){
-      await inputs[0].setInputFiles(file,{timeout:20000});
-      return;
-    }
-  }
-  throw new Error('ChatGPT “+”菜单未提供可用的图片上传控件');
 }
 
 export async function uploadChatGPTReferences(page,references,onProgress,{

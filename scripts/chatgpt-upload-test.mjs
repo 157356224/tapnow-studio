@@ -27,18 +27,18 @@ try{
   const page=await browser.newPage();
   await page.setContent('<form id="composer">'+
     '<div id="prompt-textarea" contenteditable="true" role="textbox"></div>'+
+    '<input type="file" accept="image/png" hidden />'+
     '<button id="plus" type="button" data-testid="composer-plus-btn">+</button>'+
     '<button type="button" data-testid="send-button">发送</button>'+
     '</form>');
   await page.evaluate(imageSource=>{
     window.uploadedNames=[];
     window.sentNames=[];
+    window.plusClicks=0;
     const form=document.querySelector('#composer');
-    document.querySelector('#plus').onclick=()=>{
-      if(form.querySelector('input[type="file"]'))return;
-      const picker=document.createElement('input');
-      picker.type='file';picker.accept='image/png';picker.hidden=true;
-      picker.onchange=()=>{
+    document.querySelector('#plus').onclick=()=>{window.plusClicks++;};
+    const picker=form.querySelector('input[type="file"]');
+    picker.onchange=()=>{
         const files=[...picker.files];
         for(const file of files){
           window.uploadedNames.push(file.name);
@@ -57,8 +57,6 @@ try{
           },240);
         }
         picker.value='';
-      };
-      form.append(picker);
     };
     document.querySelector('[data-testid="send-button"]').onclick=()=>{
       window.sentNames=[...window.uploadedNames];
@@ -78,6 +76,7 @@ try{
   });
   const actual=await page.evaluate(()=>({
     uploaded:window.uploadedNames,sent:window.sentNames,
+    plusClicks:window.plusClicks,
     prompt:document.querySelector('#prompt-textarea').textContent,
     previews:document.querySelectorAll('#composer img').length
   }));
@@ -85,45 +84,51 @@ try{
   assert.deepEqual(actual.sent,['one.png','two.png'],
     'The send click must happen only after BOTH references attached');
   assert.equal(actual.previews,2);
+  assert.equal(actual.plusClicks,0,'Never click the plus button to upload images');
   assert.match(actual.prompt,/已上传的参考图片 1/);
   assert.match(actual.prompt,/已上传的参考图片 2/);
   assert.ok(states.some(state=>/已确认 2 张参考图/.test(state.message)));
   assert.ok(fs.existsSync(path.join(temp,path.basename(result.mediaUrl))));
-  console.log('PASS: lazy ChatGPT plus-menu input, sequential 2-image upload, asynchronous previews before send');
+  console.log('PASS: direct hidden-input upload, sequential 2-image upload, asynchronous previews before send');
   await page.close();
 
-  const menuPage=await browser.newPage();
-  await menuPage.setContent('<form id="composer">'+
+  const dropPage=await browser.newPage();
+  await dropPage.setContent('<form id="composer">'+
     '<div id="prompt-textarea" contenteditable="true" role="textbox"></div>'+
     '<button id="plus" type="button" data-testid="composer-plus-btn">+</button></form>');
-  await menuPage.evaluate(imageSource=>{
+  await dropPage.evaluate(imageSource=>{
     const form=document.querySelector('#composer');
-    document.querySelector('#plus').onclick=()=>{
-      const menu=document.createElement('div');
-      menu.setAttribute('role','menu');
-      const item=document.createElement('button');
-      item.type='button';item.setAttribute('role','menuitem');
-      item.textContent='上传文件';
-      item.onclick=()=>{
-        const input=document.createElement('input');
-        input.type='file';input.accept='image/png';
-        input.style.display='none';form.append(input);
-        input.onchange=()=>{
+    window.plusClicks=0;
+    window.droppedFiles=[];
+    document.querySelector('#plus').onclick=()=>{window.plusClicks++;};
+    form.addEventListener('dragenter',event=>{
+      event.preventDefault();
+      if(form.querySelector('[data-testid="image-dropzone"]'))return;
+      const overlay=document.createElement('div');
+      overlay.dataset.testid='image-dropzone';
+      overlay.style.cssText='width:240px;height:120px';
+      overlay.addEventListener('dragover',event=>event.preventDefault());
+      overlay.addEventListener('drop',event=>{
+        event.preventDefault();
+        for(const file of event.dataTransfer.files){
+          window.droppedFiles.push(file.name);
           const img=document.createElement('img');
           img.src=imageSource;img.width=50;img.height=50;
           form.append(img);
-        };
-        input.click();
-      };
-      menu.append(item);form.append(menu);
-    };
+        }
+      });
+      form.append(overlay);
+    });
   },source);
-  await uploadChatGPTReferences(menuPage,refs.slice(0,1),null,{
+  await uploadChatGPTReferences(dropPage,refs,null,{
     confirmTimeoutMs:4500,pollMs:50
   });
-  assert.equal(await menuPage.locator('#composer img').count(),1);
-  console.log('PASS: plus menu > upload file > native filechooser > composer preview');
-  await menuPage.close();
+  assert.equal(await dropPage.locator('#composer img').count(),2);
+  assert.deepEqual(await dropPage.evaluate(()=>window.droppedFiles),['one.png','two.png']);
+  assert.equal(await dropPage.evaluate(()=>window.plusClicks),0);
+  assert.equal(await dropPage.locator('input[type=file]').count(),0);
+  console.log('PASS: drop 2 local images on composer/dropzone with no file input and no plus click');
+  await dropPage.close();
 
   const failed=await browser.newPage();
   await failed.setContent('<form><div id="prompt-textarea" contenteditable="true" role="textbox"></div>'+
