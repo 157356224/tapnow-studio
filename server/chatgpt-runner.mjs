@@ -121,10 +121,162 @@ const inputSelector='#prompt-textarea,[data-testid="composer-input"][contentedit
   '[contenteditable="true"][role="textbox"],textarea[placeholder*="Message"],'+
   'textarea[placeholder*="消息"]';
 
+// The ChatGPT composer may mount its file input only after the plus button
+// opens. The native input's FileList is NOT proof of an accepted attachment:
+// ChatGPT often clears it before an asynchronous upload finishes.
+async function composerAttachmentState(page,filenames=[]){
+  return page.evaluate(({inputSelector,filenames})=>{
+    const editor=document.querySelector(inputSelector);
+    const composer=editor?.closest('form')||
+      editor?.closest('[data-testid*="composer"]')||
+      editor?.closest('[class*="composer"]')||
+      editor?.parentElement?.parentElement?.parentElement||
+      document.body;
+    const visible=el=>{
+      const box=el.getBoundingClientRect();
+      return box.width>0&&box.height>0;
+    };
+    const imageCount=[...composer.querySelectorAll('img')]
+      .filter(img=>visible(img)&&(img.currentSrc||img.src)).length;
+    const cards=[...composer.querySelectorAll(
+      '[data-testid*="attachment-preview"],[data-testid*="attachment-card"],'+
+      '[data-testid*="file-preview"],[data-testid*="upload-preview"]'
+    )].filter(visible).length;
+    const remove=[...composer.querySelectorAll(
+      'button[aria-label],button[title]'
+    )].filter(button=>visible(button)&&
+      /remove (?:file|image|attachment)|delete attachment|移除(?:文件|图片|附件)|删除附件/i.test(
+        button.getAttribute('aria-label')||button.getAttribute('title')||''
+      )).length;
+    const content=[composer.textContent||'',
+      ...[...composer.querySelectorAll('[aria-label],[title]')]
+        .map(el=>el.getAttribute('aria-label')||el.getAttribute('title')||'')
+    ].join('\n');
+    const names=filenames.filter(name=>content.includes(name)).length;
+    const uploading=!![...composer.querySelectorAll('[aria-label],[role="status"]')]
+      .some(el=>visible(el)&&/uploading|正在上传|上传中|processing (?:file|image)/i
+        .test(el.getAttribute('aria-label')||el.textContent||''));
+    return {imageCount,cards,remove,names,uploading};
+  },{inputSelector,filenames});
+}
+
+async function chatGPTImageInputs(page){
+  const inputs=page.locator('input[type="file"]');
+  const items=await inputs.evaluateAll(elements=>elements.map((el,index)=>({
+    index,accept:(el.getAttribute('accept')||'').toLowerCase(),
+    disabled:el.disabled
+  })));
+  return items.filter(x=>!x.disabled&&
+    (!x.accept||/image\/|\.png|\.jpe?g|\.webp|^\.\*$/.test(x.accept)||
+      x.accept==='*/*')&&
+    !(/audio\/|video\//.test(x.accept)&&
+      !/image\//.test(x.accept))
+  ).sort((a,b)=>Number(/image\/|\.png|\.jpe?g|\.webp/.test(b.accept))-
+      Number(/image\/|\.png|\.jpe?g|\.webp/.test(a.accept))||b.index-a.index)
+    .map(item=>inputs.nth(item.index));
+}
+
+async function chooseChatGPTFile(page,file){
+  let inputs=await chatGPTImageInputs(page);
+  if(inputs.length){
+    // Do not call setInputFiles([]): React may interpret that as removing an
+    // existing reference. Reusing the same input for another file is safe.
+    await inputs[0].setInputFiles(file,{timeout:20000});
+    return;
+  }
+  const plusButtons=[
+    page.locator('[data-testid="composer-plus-btn"]'),
+    page.getByRole('button',{name:/^(?:attach|add files|add photos|添加|附件|上传|更多)(?:\s|$)/i}),
+    page.locator('button[aria-label*="Attach"],button[aria-label*="Upload"],'+
+      'button[aria-label*="附件"],button[aria-label*="上传"]')
+  ];
+  let opened=false;
+  for(const group of plusButtons){
+    for(let i=0,n=Math.min(await group.count(),12);i<n;i++){
+      const button=group.nth(i);
+      if(!await button.isVisible().catch(()=>false))continue;
+      await button.click({timeout:5000});
+      opened=true;
+      break;
+    }
+    if(opened)break;
+  }
+  if(!opened)throw new Error('ChatGPT 当前输入框找不到“+”附件上传入口');
+  inputs=await chatGPTImageInputs(page);
+  if(inputs.length){
+    await inputs[0].setInputFiles(file,{timeout:20000});
+    return;
+  }
+  const item=page.getByRole('menuitem',{name:/照片|图片|文件|上传|photo|image|file|upload/i})
+    .or(page.getByRole('button',{name:/^(?:upload|add photos|add files|上传文件|添加照片|上传照片)/i}));
+  for(let i=0,n=Math.min(await item.count(),15);i<n;i++){
+    const target=item.nth(i);
+    if(!await target.isVisible().catch(()=>false))continue;
+    const chooserPromise=page.waitForEvent('filechooser',{timeout:4000})
+      .catch(()=>null);
+    await target.click({timeout:5000});
+    const chooser=await chooserPromise;
+    if(chooser){await chooser.setFiles(file);return;}
+    inputs=await chatGPTImageInputs(page);
+    if(inputs.length){
+      await inputs[0].setInputFiles(file,{timeout:20000});
+      return;
+    }
+  }
+  throw new Error('ChatGPT “+”菜单未提供可用的图片上传控件');
+}
+
+export async function uploadChatGPTReferences(page,references,onProgress,{
+  confirmTimeoutMs=75000,pollMs=250
+}={}){
+  if(!references.length)return;
+  const files=references.map(ref=>{
+    if(!ref.file||!fs.existsSync(ref.file))
+      throw new Error('ChatGPT 参考图片文件不存在：'+ref.name);
+    if(!/\.(png|jpe?g|webp)$/i.test(ref.file))
+      throw new Error('ChatGPT 参考图只支持 PNG、JPG、WebP：'+ref.name);
+    if(fs.statSync(ref.file).size>MAX_IMAGE_BYTES)
+      throw new Error('ChatGPT 参考图片超过 35MB：'+ref.name);
+    return ref.file;
+  });
+  const filenames=files.map(file=>path.basename(file));
+  const before=await composerAttachmentState(page,filenames);
+  for(let i=0;i<files.length;i++){
+    onProgress?.({status:'running',progress:null,
+      message:'正在上传 ChatGPT 参考图片 '+(i+1)+'/'+files.length});
+    await chooseChatGPTFile(page,files[i]);
+    const deadline=Date.now()+confirmTimeoutMs;
+    let confirmed=false;
+    while(Date.now()<deadline){
+      if(page.isClosed())throw new Error('ChatGPT 浏览器已关闭，参考图上传中断');
+      const state=await composerAttachmentState(page,filenames);
+      // Require a visible, newly attached composer item for EVERY image.
+      // Merely assigning input.files or waiting a fixed interval is unsafe.
+      const attached=Math.max(
+        state.imageCount-before.imageCount,
+        state.cards-before.cards,
+        state.remove-before.remove,
+        state.names-before.names
+      );
+      if(attached>=i+1&&!state.uploading){
+        confirmed=true;
+        break;
+      }
+      await page.waitForTimeout(pollMs);
+    }
+    if(!confirmed)throw new Error(
+      'ChatGPT 未确认第 '+(i+1)+'/'+files.length+
+      ' 张参考图已加入输入框；已停止发送，避免漏图生成'
+    );
+  }
+  onProgress?.({status:'running',progress:null,
+    message:'ChatGPT 已确认 '+files.length+' 张参考图，准备发送提示词'});
+}
+
 export async function runChatGPTBrowser({
   page,job,outputDir,onProgress,
   navigate=true,intervalMs=500,timeoutMs=12*60*1000,
-  references=[]
+  references=[],referenceUploadTimeoutMs=75000
 }){
   if(typeof job.prompt!=='string'||!job.prompt.trim()||job.prompt.length>32000)
     throw new Error('ChatGPT 图片提示词长度必须为 1–32000 字符');
@@ -145,13 +297,9 @@ export async function runChatGPTBrowser({
   }));
   const existingImages=new Set(baseline.imageUrls);
   // The page never receives HAR cookies, tokens or authentication headers.
-  if(references.length){
-    const attach=page.locator('input[type="file"]').first();
-    if(!await attach.count())
-      throw new Error('当前 ChatGPT 页面未提供文件上传控件，无法引用画布图片');
-    await attach.setInputFiles(references.map(ref=>ref.file));
-    await page.waitForTimeout(1400);
-  }
+  await uploadChatGPTReferences(page,references,onProgress,{
+    confirmTimeoutMs:referenceUploadTimeoutMs
+  });
   const instructions='请直接生成一张图片，不要只输出画面描述。'+
     '画面比例 '+(job.ratio||'2:3')+'。';
   const prompt=job.prompt.trim().replace(/@图片(\d+)/g,(_,number)=>
