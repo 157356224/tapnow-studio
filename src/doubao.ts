@@ -15,6 +15,7 @@ export type ReferenceNode = {
   token:string;
   url:string;
   connected:boolean;
+  voiceDefinition?:string;
 };
 export type DoubaoJob = {
   id:string;
@@ -52,8 +53,32 @@ export function referencesForNode(id:string,nodes:StudioNode[],edges:StudioEdge[
     const index=(kind==='image'?imageIds:audioIds).indexOf(source)+1;
     const prefix=kind==='image'?'图片':'音频';
     return {id:source,kind,title:node.data.title||prefix+index,
-      token:'@'+prefix+index,url:node.data.mediaUrl||'',connected:true};
+      token:'@'+prefix+index,url:node.data.mediaUrl||'',connected:true,
+      voiceDefinition:kind==='image'?node.data.voiceDefinition:undefined};
   });
+}
+
+/**
+ * Voice text is computed from the current connections and literal @图片N
+ * mentions. Do not persist the derived prefix in node.data.prompt; removing
+ * a mention or changing an image's voice must update the result immediately.
+ */
+export function voiceDefinitionsForPrompt(prompt:string,references:ReferenceNode[]){
+  const mentioned=new Set(Array.from(prompt.matchAll(/@图片\d+/g),match=>match[0]));
+  return references.filter(ref=>
+    ref.connected&&ref.kind==='image'&&mentioned.has(ref.token)&&
+    typeof ref.voiceDefinition==='string'&&ref.voiceDefinition.trim()
+  ).map(ref=>({
+    id:ref.id,token:ref.token,title:ref.title,
+    definition:ref.voiceDefinition!.trim()
+  }));
+}
+
+export function composeVideoPrompt(prompt:string,references:ReferenceNode[]){
+  const voiceLines=voiceDefinitionsForPrompt(prompt,references).map(ref=>
+    ref.token+'（'+ref.title+'）音色：'+ref.definition);
+  if(!voiceLines.length)return prompt;
+  return '【角色音色定义】\n'+voiceLines.join('\n')+'\n\n'+prompt;
 }
 
 /** Keep each token attached to the source ID when reordered. */

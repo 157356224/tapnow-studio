@@ -31,15 +31,28 @@ export type StudioNodeData = Record<string, unknown> & {
   bypass?: boolean;
   demo?: boolean;
   text?: string;
+  /** Character voice description; applies only when this image is @-referenced by a video. */
+  voiceDefinition?: string;
   color?: string;
 };
 export type StudioNode = Node<StudioNodeData, 'studio'>;
 export type StudioEdge = Edge;
+export type CanvasGroup = {
+  id: string;
+  name: string;
+  color: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
 export type Project = {
   id: string;
   title: string;
   nodes: StudioNode[];
   edges: StudioEdge[];
+  groups?: CanvasGroup[];
+  groupColorCursor?: number;
   viewport: Viewport;
   createdAt: string;
   updatedAt: string;

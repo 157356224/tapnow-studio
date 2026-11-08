@@ -1,0 +1,57 @@
+/* Colored organization frames are behind node cards and above the dot grid.
+   The frame itself does not capture marquee selection or node drags. */
+.tn-app-shell .tn-canvas-groups{position:absolute;inset:0;z-index:1;pointer-events:none}
+.tn-app-shell .tn-canvas-group{
+  position:absolute;box-sizing:border-box;pointer-events:none;
+  border:1.5px solid var(--tn-group-color);border-radius:16px;
+  background:color-mix(in srgb,var(--tn-group-color) 10%,transparent);
+  box-shadow:inset 0 0 0 1px #00000018;
+}
+.tn-app-shell .tn-canvas-group-header{
+  position:absolute;top:0;left:0;right:0;min-height:40px;
+  display:flex;align-items:center;gap:8px;box-sizing:border-box;
+  padding:7px 12px 8px 16px;border-radius:14px 14px 0 0;
+  color:var(--tn-group-color);
+  background:color-mix(in srgb,var(--tn-group-color) 16%,#151516);
+  border-bottom:1px solid color-mix(in srgb,var(--tn-group-color) 45%,transparent);
+  font-size:13px;font-weight:650;cursor:grab;pointer-events:auto;
+  user-select:none;-webkit-user-select:none;
+}
+.tn-app-shell .tn-canvas-group-header:active{cursor:grabbing}
+.tn-app-shell .tn-canvas-group-mark{
+  width:8px;height:8px;border-radius:50%;background:var(--tn-group-color);
+  flex:none;box-shadow:0 0 12px color-mix(in srgb,var(--tn-group-color) 65%,transparent);
+}
+.tn-app-shell .tn-canvas-group-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tn-app-shell .tn-canvas-group-name-input{
+  min-width:0;flex:1;border:1px solid var(--tn-group-color);
+  border-radius:5px;padding:3px 6px;background:#151518;color:#fff;
+  outline:none;font:inherit;cursor:text;user-select:text!important;-webkit-user-select:text!important;
+}
+.tn-app-shell .tn-canvas-group-delete{
+  pointer-events:auto;display:grid;place-items:center;flex:none;
+  width:23px;height:23px;border:0;border-radius:6px;
+  background:transparent;color:inherit;opacity:.65;cursor:pointer;
+}
+.tn-app-shell .tn-canvas-group-delete:hover{background:#ffffff20;opacity:1}
+.tn-app-shell .tn-canvas-group-resize{
+  position:absolute;pointer-events:auto;width:12px;height:12px;
+  border:2px solid var(--tn-group-color);background:#18181b;border-radius:4px;
+  box-sizing:border-box;opacity:.55;touch-action:none;
+}
+.tn-app-shell .tn-canvas-group:hover .tn-canvas-group-resize{opacity:1}
+.tn-canvas-group-resize-n {top:-7px;left:calc(50% - 6px);cursor:ns-resize}
+.tn-canvas-group-resize-ne{top:-7px;right:-7px;cursor:nesw-resize}
+.tn-canvas-group-resize-e {top:calc(50% - 6px);right:-7px;cursor:ew-resize}
+.tn-canvas-group-resize-se{bottom:-7px;right:-7px;cursor:nwse-resize}
+.tn-canvas-group-resize-s {bottom:-7px;left:calc(50% - 6px);cursor:ns-resize}
+.tn-canvas-group-resize-sw{bottom:-7px;left:-7px;cursor:nesw-resize}
+.tn-canvas-group-resize-w {top:calc(50% - 6px);left:-7px;cursor:ew-resize}
+.tn-canvas-group-resize-nw{top:-7px;left:-7px;cursor:nwse-resize}
+
+/* Dragging on cards and frame labels must not turn canvas text blue.
+   Actual text editors still support caret positioning and selection. */
+.tn-app-shell .canvas-container{user-select:none;-webkit-user-select:none}
+.tn-app-shell .canvas-container :is(input:not([readonly]),textarea:not([readonly]),[contenteditable="true"]){
+  user-select:text!important;-webkit-user-select:text!important;
+}

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, DragEvent, KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, ConnectionLineType,
-  SelectionMode, ViewportPortal, addEdge, useEdgesState, useNodesState, useReactFlow
+  SelectionMode, ViewportPortal, addEdge, getNodesBounds, useEdgesState, useNodesState, useReactFlow
 } from '@xyflow/react';
 import type { Connection, Edge, NodeChange } from '@xyflow/react';
 import {
@@ -19,11 +19,12 @@ import { ConnectionHighlightContext,ConnectionInvalidContext,FlowTargetContext,N
 import type { ConnectionHighlight,NodeEditorState } from './StudioNodeV2';
 import {FlowEdge} from './FlowEdge';
 import {SelectionGroupControls} from './SelectionGroupControls';
+import {CanvasGroupLayer} from './CanvasGroupLayer';
 import {planGroupConnections} from './node-alignment.mjs';
 import {snapNodePositionChanges} from './node-smart-guides.mjs';
 import type {SmartGuides} from './node-smart-guides.mjs';
 import { demoImages, defaultVideoModel, h3VideoModels, kindLabels, models, newData, normalizeVideoNodes, sampleAdCanvas, sampleCanvas, supportedDoubaoVideoModels } from './sample';
-import { referencesForNode, resolveReferences, reorderReferenceNodes } from './doubao';
+import { composeVideoPrompt, referencesForNode, resolveReferences, reorderReferenceNodes } from './doubao';
 import type { DoubaoAccount, DoubaoJob } from './doubao';
 import { AccountsPanel } from './AccountsPanel';
 import {MuseAccountsPanel} from './MuseAccountsPanel';
@@ -33,7 +34,7 @@ import {VideoFrameEditor} from './VideoFrameEditor';
 import {ChatGPTPanel} from './ChatGPTPanel';
 import type {ChatGPTAccount} from './chatgpt';
 import type {MuseAccount,MuseJob,MuseQuotaSummary} from './muse';
-import type { Kind, Project, ProjectSummary, StudioEdge, StudioNode, StudioNodeData } from './types';
+import type { CanvasGroup, Kind, Project, ProjectSummary, StudioEdge, StudioNode, StudioNodeData } from './types';
 
 const nodeTypes = { studio: StudioNodeV2 };
 const edgeTypes = { blueflow: FlowEdge };
@@ -48,6 +49,10 @@ const entryTools: { kind: Kind; label: string; desc: string; icon: typeof ImageI
   { kind: 'audio', label: '音频生成', desc: '配乐、音效、旁白', icon: AudioLines }
 ];
 const uid = () => crypto.randomUUID();
+const groupColorAt = (index:number) =>
+  'hsl(' + ((index*137.507764+24)%360).toFixed(4) + ' ' +
+  (65+Math.floor(index/360)%4*6) + '% ' +
+  (62+Math.floor(index/1440)%3*5) + '%)';
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 type Panel = 'agent' | 'projects' | 'assets' | 'inspector' | 'doubao' | 'muse' | 'h3' | 'chatgpt' | null;
 type ChatGPTImageJob={
@@ -58,7 +63,7 @@ type ChatGPTImageJob={
 type H3Job={id:string;status:'queued'|'starting'|'running'|'completed'|'failed'|'interrupted';
   progress:number;message:string;videoUrl?:string;};
 type NodeMenuOrigin = {id:string;side:'source'|'target';dropped:boolean;ids?:string[]};
-type History = { nodes: StudioNode[]; edges: StudioEdge[] };
+type History = { nodes: StudioNode[]; edges: StudioEdge[]; groups: CanvasGroup[] };
 type Plan = { valid: boolean; steps?: {id: string; kind: Kind}[]; skipped?: string[]; error?: string };
 
 // Reject duplicate pairs, reverse links and any edge which would create a cycle.
@@ -103,6 +108,7 @@ function Workspace() {
   const rf = useReactFlow<StudioNode, StudioEdge>();
   const [nodes, setNodes, onNodesChange] = useNodesState<StudioNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<StudioEdge>([]);
+  const [groups, setGroups] = useState<CanvasGroup[]>([]);
   const [projectId, setProjectId] = useState('');
   const [title, setTitle] = useState('Untitled');
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -159,8 +165,23 @@ function Workspace() {
   const rootRef = useRef<HTMLDivElement>(null);
   const nodesRef = useRef<StudioNode[]>([]);
   const edgesRef = useRef<StudioEdge[]>([]);
+  const groupsRef = useRef<CanvasGroup[]>([]);
+  const groupColorCursorRef = useRef(0);
   nodesRef.current = nodes;
   edgesRef.current = edges;
+  groupsRef.current = groups;
+  useEffect(()=>{
+    const canvas=rootRef.current?.querySelector('.canvas-container');
+    if(!canvas)return;
+    const preventCanvasSelection=(event:Event)=>{
+      const target=event.target;
+      const element=target instanceof Element?target:target instanceof Node?target.parentElement:null;
+      if(element?.closest('input:not([readonly]),textarea:not([readonly]),select,[contenteditable="true"],.tn-compose-editor'))return;
+      event.preventDefault();
+    };
+    canvas.addEventListener('selectstart',preventCanvasSelection);
+    return ()=>canvas.removeEventListener('selectstart',preventCanvasSelection);
+  },[]);
   // During a drag positions change every frame, but edge styling depends on
   // selection/drag state only. Avoid rebuilding every edge per move.
   const selectionKey=nodes.filter(n=>n.selected).map(n=>n.id).join('|');
@@ -256,21 +277,24 @@ function Workspace() {
   },[museAccounts.length,refreshMuseQuota]);
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(''), 3300); return () => clearTimeout(t); }, [toast]);
   const snapshot = useCallback(() => {
-    history.current.push({nodes:structuredClone(nodesRef.current), edges:structuredClone(edgesRef.current)});
+    history.current.push({nodes:structuredClone(nodesRef.current), edges:structuredClone(edgesRef.current),
+      groups:structuredClone(groupsRef.current)});
     if (history.current.length > 40) history.current.shift();
     forward.current = [];
   }, []);
   const undo = useCallback(() => {
     const item = history.current.pop();
     if (!item) return;
-    forward.current.push({nodes:structuredClone(nodesRef.current), edges:structuredClone(edgesRef.current)});
-    setNodes(item.nodes); setEdges(item.edges);
+    forward.current.push({nodes:structuredClone(nodesRef.current), edges:structuredClone(edgesRef.current),
+      groups:structuredClone(groupsRef.current)});
+    setNodes(item.nodes); setEdges(item.edges); setGroups(item.groups);
   }, [setNodes, setEdges]);
   const redo = useCallback(() => {
     const item = forward.current.pop();
     if (!item) return;
-    history.current.push({nodes:structuredClone(nodesRef.current), edges:structuredClone(edgesRef.current)});
-    setNodes(item.nodes); setEdges(item.edges);
+    history.current.push({nodes:structuredClone(nodesRef.current), edges:structuredClone(edgesRef.current),
+      groups:structuredClone(groupsRef.current)});
+    setNodes(item.nodes); setEdges(item.edges); setGroups(item.groups);
   }, [setNodes, setEdges]);
 
   const openProject = useCallback(async (id: string) => {
@@ -280,6 +304,8 @@ function Workspace() {
       setReady(false);
       const p = await request<Project>('/api/projects/' + id);
       setProjectId(p.id); setTitle(p.title); setNodes(normalizeVideoNodes(p.nodes)); setEdges(p.edges);
+      setGroups(Array.isArray(p.groups)?p.groups:[]);
+      groupColorCursorRef.current=Math.max(p.groupColorCursor||0,p.groups?.length||0);
       history.current = []; forward.current = [];
       viewport.current = p.viewport;
       setPanel(null);
@@ -295,14 +321,16 @@ function Workspace() {
         if (list.length) { setProjects(list); await openProject(list[0].id); }
         else {
           const p = await request<Project>('/api/projects', JSONBody({
-            title: 'Creative OS 新画布', nodes:[],edges:[], viewport: {x:0,y:0,zoom:1}
+            title: 'Creative OS 新画布', nodes:[],edges:[],groups:[],groupColorCursor:0,
+            viewport: {x:0,y:0,zoom:1}
           }));
           if (!active) return;
           setProjects([{id:p.id,title:p.title,updatedAt:p.updatedAt}]);
           await openProject(p.id);
         }
       } catch (e) {
-        setNodes([]); setEdges([]); setTitle('离线演示画布');
+        setNodes([]); setEdges([]); setGroups([]); groupColorCursorRef.current=0;
+        setTitle('离线演示画布');
         setReady(true); notify('本地服务未连接，画布暂时仅保存在浏览器');
       }
     };
@@ -316,10 +344,12 @@ function Workspace() {
   const saveProjectSnapshot=useCallback((
     id:string,content:Pick<Project,'title'|'nodes'|'edges'|'viewport'>
   )=>{
+    const payload={...content,groups:structuredClone(groupsRef.current),
+      groupColorCursor:groupColorCursorRef.current};
     const task=projectSaveTail.current.then(()=>request<{id:string;updatedAt:string}>(
       '/api/projects/'+id,{
         method:'PUT',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify(content)
+        body:JSON.stringify(payload)
       }
     ));
     projectSaveTail.current=task.then(()=>{},()=>{});
@@ -336,7 +366,9 @@ function Workspace() {
       setProjects(ps => ps.map(p => p.id === projectId ? {...p,title,updatedAt:r.updatedAt} : p));
     } catch (e) {
       setSaveStatus('保存失败');
-      localStorage.setItem('tapnow-local-backup', JSON.stringify({title,nodes:nodesRef.current,edges:edgesRef.current,viewport:viewport.current}));
+      localStorage.setItem('tapnow-local-backup', JSON.stringify({title,nodes:nodesRef.current,
+        edges:edgesRef.current,groups:groupsRef.current,
+        groupColorCursor:groupColorCursorRef.current,viewport:viewport.current}));
     }
   }, [projectId, ready, title, saveProjectSnapshot]);
   useEffect(() => {
@@ -345,12 +377,13 @@ function Workspace() {
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => { void saveNow(); }, 1000);
     return () => { if (timer.current) clearTimeout(timer.current); };
-  }, [nodes, edges, title, ready, viewportRevision, saveNow]);
+  }, [nodes, edges, groups, title, ready, viewportRevision, saveNow]);
 
   const createProject = useCallback(async (name='Untitled', template:'blank'|'demo'|'ad'='blank') => {
     try {
       const content = template === 'demo' ? sampleCanvas() : template === 'ad' ? sampleAdCanvas() : {nodes:[],edges:[]};
-      const p = await request<Project>('/api/projects', JSONBody({title:name, ...content,viewport:{x:170,y:120,zoom:1}}));
+      const p = await request<Project>('/api/projects', JSONBody({title:name, ...content,
+        groups:[],groupColorCursor:0,viewport:{x:170,y:120,zoom:1}}));
       setProjects(prev => [{id:p.id,title:p.title,updatedAt:p.updatedAt},...prev]);
       setShowTemplates(false); await openProject(p.id);
       if (template !== 'blank') setTimeout(() => void rf.fitView({padding:.22,duration:450}), 200);
@@ -379,6 +412,48 @@ function Workspace() {
     setShowAdd(false); setMenuSearch('');
     return id;
   }, [rf, setNodes, snapshot]);
+  const createGroup=useCallback(()=>{
+    snapshot();
+    const selectedNodes=nodesRef.current.filter(n=>n.selected);
+    const bounds=selectedNodes.length?getNodesBounds(selectedNodes):null;
+    const canvas=rootRef.current?.querySelector('.canvas-container')?.getBoundingClientRect();
+    const center=rf.screenToFlowPosition({
+      x:(canvas?.left||0)+(canvas?.width||window.innerWidth)*.55,
+      y:(canvas?.top||0)+(canvas?.height||window.innerHeight)*.48
+    });
+    // Stagger unbound frames so the most recently created title bar does not
+    // cover the previous one; all frames remain immediately accessible.
+    const offset=(groupsRef.current.length%7)*46;
+    const used=new Set(groupsRef.current.map(g=>g.color));
+    let index=groupColorCursorRef.current;
+    let color=groupColorAt(index);
+    while(used.has(color)){index++;color=groupColorAt(index);}
+    groupColorCursorRef.current=index+1;
+    setGroups(prev=>[...prev,{
+      id:uid(),name:'分组 '+(index+1),color,
+      x:bounds?bounds.x-36:center.x-220+offset,
+      y:bounds?bounds.y-68:center.y-150+offset,
+      width:bounds?Math.max(350,bounds.width+72):440,
+      height:bounds?Math.max(220,bounds.height+104):300
+    }]);
+    setShowAdd(false);
+    notify(selectedNodes.length?'已为选中的节点创建彩色分组':'已创建彩色分组');
+  },[snapshot,rf,notify]);
+  const changeGroup=useCallback((id:string,patch:Partial<CanvasGroup>)=>{
+    setGroups(prev=>prev.map(group=>group.id===id?{...group,...patch}:group));
+  },[]);
+  const moveGroupNodes=useCallback((positions:Map<string,{x:number;y:number}>,dx:number,dy:number)=>{
+    setNodes(prev=>prev.map(node=>{
+      const initial=positions.get(node.id);
+      return initial?{...node,position:{x:initial.x+dx,y:initial.y+dy}}:node;
+    }));
+  },[setNodes]);
+  const renameGroup=useCallback((id:string,name:string)=>{
+    snapshot();changeGroup(id,{name});
+  },[snapshot,changeGroup]);
+  const removeGroup=useCallback((id:string)=>{
+    snapshot();setGroups(prev=>prev.filter(g=>g.id!==id));
+  },[snapshot]);
   const revealNewNode=useCallback((point:{x:number;y:number},kind:Kind)=>{
     const centre={x:point.x+(kind==='video'?245:155),y:point.y+155};
     const screen=rf.flowToScreenPosition(centre);
@@ -595,7 +670,7 @@ function Workspace() {
   const referenceSignature=useMemo(()=>[
     ...edges.map(e=>e.target+':'+e.source),
     ...nodes.filter(n=>n.data.kind==='image'||n.data.kind==='audio')
-      .map(n=>n.id+':'+(n.data.mediaUrl||'')+':'+n.data.title),
+      .map(n=>n.id+':'+(n.data.mediaUrl||'')+':'+n.data.title+':'+(n.data.voiceDefinition||'')),
     ...nodes.filter(n=>n.data.referenceOrder?.length)
       .map(n=>n.id+':'+n.data.referenceOrder?.join(','))
   ].join('|'),[edges,nodes]);
@@ -617,6 +692,9 @@ function Workspace() {
     const source=nodesRef.current.find(n=>n.id===id);
     if (!source) return;
     const kind=kindOverride || (source.data.kind==='text'?'image':source.data.kind);
+    const submittedPrompt=source.data.kind==='video'&&kind==='video'
+      ?composeVideoPrompt(source.data.prompt||'',referencesFor(id))
+      :source.data.prompt||'';
     if (['running','queued'].includes(source.data.status||'')) return;
     // React state may not have committed the queued flag on a rapid double
     // click. Guard only THIS node; other nodes remain free to submit jobs.
@@ -738,7 +816,7 @@ function Workspace() {
           ?{...p,updatedAt:saved.updatedAt}:p));
         const job=await request<H3Job>('/api/h3/jobs',JSONBody({
           projectId,nodeId:id,model:source.data.model,
-          prompt:source.data.prompt,duration:source.data.duration||'6s',
+          prompt:submittedPrompt,duration:source.data.duration||'6s',
           resolution:source.data.resolution||'768p',
           ratio:source.data.ratio||'16:9',
           references:h3References.map(ref=>({id:ref.id}))
@@ -815,7 +893,7 @@ function Workspace() {
         const job=await request<MuseJob>('/api/muse/jobs',JSONBody({
           provider:'muse',projectId,nodeId:id,
           accountId:source.data.museAccountId||'auto',
-          prompt:source.data.prompt,ratio:source.data.ratio,
+          prompt:submittedPrompt,ratio:source.data.ratio,
           resolution:kind==='image'?(source.data.resolution||'2K'):undefined,
           duration:source.data.duration||'5s',
           references:museRefs.map(ref=>({id:ref.id}))
@@ -901,7 +979,7 @@ function Workspace() {
         setProjects(ps=>ps.map(p=>p.id===projectId?{...p,updatedAt:saved.updatedAt}:p));
         const job=await request<DoubaoJob>('/api/doubao/jobs',JSONBody({
           projectId,nodeId:id,accountId:source.data.accountId,
-          model:selectedModel,prompt:source.data.prompt,
+          model:selectedModel,prompt:submittedPrompt,
           ratio:source.data.ratio,duration:source.data.duration,
           references:refs.map(ref=>({id:ref.id}))
         }));
@@ -1204,7 +1282,7 @@ function Workspace() {
   };
   const onCanvasDoubleClick=(e:React.MouseEvent<HTMLDivElement>)=>{
     const el=e.target as HTMLElement;
-    if(el.closest('.react-flow__node,.canvas-tools,.bottom-left-controls,.add-popover,.tn-empty-start,.tn-topbar,.right-panel')) return;
+    if(el.closest('.react-flow__node,.tn-canvas-group,.canvas-tools,.bottom-left-controls,.add-popover,.tn-empty-start,.tn-topbar,.right-panel')) return;
     if(el.closest('.react-flow') || el.classList.contains('canvas-container')){
       e.preventDefault();
       e.stopPropagation();
@@ -1266,12 +1344,21 @@ function Workspace() {
     setEdges(current=>current.filter(item=>item.id!==edge.id));
     setCutHover(null);
   },[snapshot,setEdges,setCutHover]);
-  const exportJSON=()=>exportTextFile((title||'canvas')+'.json',JSON.stringify({version:1,title,nodes,edges,viewport:viewport.current},null,2));
+  const exportJSON=()=>exportTextFile((title||'canvas')+'.json',JSON.stringify({
+    version:1,title,nodes,edges,groups,groupColorCursor:groupColorCursorRef.current,
+    viewport:viewport.current
+  },null,2));
   const importJSON=async(file:File)=>{
     try{
       const data=JSON.parse(await file.text());
       if(!Array.isArray(data.nodes)||!Array.isArray(data.edges))throw new Error('不是有效的工作流 JSON');
-      snapshot();setNodes(normalizeVideoNodes(data.nodes));setEdges(data.edges);setTitle(data.title||'导入的项目');
+      snapshot();setNodes(normalizeVideoNodes(data.nodes));setEdges(data.edges);
+      setGroups(Array.isArray(data.groups)?data.groups:[]);
+      groupColorCursorRef.current=Math.max(
+        Number.isSafeInteger(data.groupColorCursor)?data.groupColorCursor:0,
+        Array.isArray(data.groups)?data.groups.length:0
+      );
+      setTitle(data.title||'导入的项目');
       if(data.viewport)void rf.setViewport(data.viewport);
       notify('工作流导入成功');
     }catch(e){notify('导入失败：'+(e as Error).message)}
@@ -1348,6 +1435,7 @@ function Workspace() {
       </div>
       <div className="tn-top-actions">
         <button title="添加到画布" onClick={()=>{setMenuOrigin(null);setShowAdd(true)}}><Plus size={17}/></button>
+        <button title="创建彩色分组" aria-label="创建彩色分组" onClick={createGroup}><Square size={17}/></button>
         <button title="导入工作流" onClick={()=>importPicker.current?.click()}><Upload size={16}/></button>
         <button title="保存工作流 JSON" onClick={exportJSON}><Share2 size={16}/></button>
         <span className="tn-top-divider"/>
@@ -1406,6 +1494,11 @@ function Workspace() {
             deleteKeyCode={null} multiSelectionKeyCode="Shift"
             proOptions={{hideAttribution:true}}
           ><Background color="#55565a" gap={23} size={1.3} variant={BackgroundVariant.Dots}/>
+          {groups.length>0&&<ViewportPortal><CanvasGroupLayer
+            groups={groups} nodes={nodes} zoom={zoom} onChange={changeGroup}
+            onMoveNodes={moveGroupNodes} onRename={renameGroup} onRemove={removeGroup}
+            onInteractionStart={()=>{snapshot();setEditorState({id:null,instant:true});}}
+          /></ViewportPortal>}
           {nodes.filter(node=>node.selected).length>=2&&
             <SelectionGroupControls nodes={nodes} zoom={zoom}
               onConnect={groupTargets} onAdd={groupAdd}
@@ -1435,7 +1528,7 @@ function Workspace() {
           role="img" aria-label="剪断连接线" title="左键剪断连接线">
           <Scissors size={17} strokeWidth={1.8}/>
         </div>}
-        {ready && nodes.length===0 && !showAdd && <div className="tn-empty-start">
+        {ready && nodes.length===0 && groups.length===0 && !showAdd && <div className="tn-empty-start">
           <div><span className="tn-double-click"><MousePointer2 size={14}/> 双击</span> 画布自由生成 或者 看模板</div>
           <div className="tn-start-choices">
             <button onClick={()=>addNode('video')}><Video size={15}/> 文字生视频</button>
@@ -1451,6 +1544,7 @@ function Workspace() {
           <button className="tool-icon" title="导入素材" onClick={()=>filePicker.current?.click()}><FolderOpen size={17}/></button>
           <button className="tool-icon" title="工作流模板" onClick={()=>setShowTemplates(true)}><LayoutGrid size={17}/></button>
           <button className="tool-icon" title="图文节点" onClick={()=>addNode('text')}><MessageCircle size={17}/></button>
+          <button className="tool-icon" title="创建彩色分组（选中节点后可自动包围）" aria-label="创建彩色分组" onClick={createGroup}><Square size={17}/></button>
           <button className="tool-icon" title="历史操作" onClick={undo}><Undo2 size={17}/></button>
           <MuseQuotaButton data={museQuota} loading={museQuotaLoading}
             error={museQuotaError}
@@ -1462,6 +1556,7 @@ function Workspace() {
           <div className="popover-heading">{menuOrigin?'引用该节点生成':'添加到画布'}{!menuOrigin&&<button onClick={()=>setShowAdd(false)}><X size={14}/></button>}</div>
           {!menuOrigin&&<div className="popover-search"><Search size={14}/><input autoFocus placeholder="搜索节点…" value={menuSearch} onChange={e=>setMenuSearch(e.target.value)}/></div>}
           <div className="popover-tools">{(menuOrigin?entryTools.filter(t=>t.kind!=='audio'):filteredTools).map(({kind,label,desc,icon:Icon})=><button key={kind} onClick={()=>addFromMenu(kind)}><span className="tool-list-icon"><Icon size={17}/></span><span><strong>{menuOrigin&&kind==='text'?'文本生成':label}</strong>{(!menuOrigin||kind==='text')&&<small>{menuOrigin&&kind==='text'?'脚本、广告词、品牌文案':desc}</small>}</span>{!menuOrigin&&<Plus size={14}/>}</button>)}</div>
+          {!menuOrigin&&<button className="popover-upload" onClick={createGroup}><Square size={16}/> 创建彩色分组</button>}
           {!menuOrigin&&<button className="popover-upload" onClick={()=>{setShowAdd(false);filePicker.current?.click()}}><Upload size={16}/> 上传本地素材</button>}
         </div>}
         <div className="bottom-left-controls">

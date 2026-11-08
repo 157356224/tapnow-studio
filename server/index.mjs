@@ -85,6 +85,9 @@ app.post('/api/projects', (req, res) => {
     title: String(req.body.title || '未命名画布').slice(0, 100),
     nodes: Array.isArray(req.body.nodes) ? req.body.nodes : [],
     edges: Array.isArray(req.body.edges) ? req.body.edges : [],
+    groups: Array.isArray(req.body.groups) ? req.body.groups : [],
+    groupColorCursor: Number.isSafeInteger(req.body.groupColorCursor) && req.body.groupColorCursor >= 0
+      ? req.body.groupColorCursor : 0,
     viewport: req.body.viewport || { x: 0, y: 0, zoom: 1 },
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
@@ -112,6 +115,9 @@ app.put('/api/projects/:id', (req, res) => {
         preserveMuseCompletedMedia(old,preserveCompletedVideoMedia(old,req.body.nodes)))
       :old.nodes,
     edges: Array.isArray(req.body.edges) ? req.body.edges : old.edges,
+    groups: Array.isArray(req.body.groups) ? req.body.groups : (old.groups || []),
+    groupColorCursor: Number.isSafeInteger(req.body.groupColorCursor) && req.body.groupColorCursor >= 0
+      ? req.body.groupColorCursor : (old.groupColorCursor || 0),
     viewport: req.body.viewport || old.viewport,
     updatedAt: new Date().toISOString()
   };

@@ -546,6 +546,7 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
         </div>
         {(kind==='video'||kind==='image')?<VideoPromptEditor
           prompt={data.prompt||''} references={references} explicitIds={data.referenceIds||[]}
+          showVoiceDefinitions={kind==='video'}
           onReorder={(referenceId,direction,currentPrompt)=>
             api.reorderReferences(id,referenceId,direction,currentPrompt)}
           onPrompt={value=>api.update(id,{prompt:value})}
@@ -567,6 +568,15 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
           value={data.prompt||''}
           onChange={next=>api.update(id,{prompt:next})}
         />}
+        {kind==='image'&&<div className="tn-image-voice-config">
+          <label htmlFor={'tn-image-voice-'+id}>角色音色定义</label>
+          <textarea id={'tn-image-voice-'+id} className="nodrag nowheel"
+            aria-label="角色音色定义" rows={3}
+            placeholder="例如：林澈，22岁男声，音色清亮、略带磁性，语速自然，情绪克制。"
+            value={data.voiceDefinition||''}
+            onChange={event=>api.update(id,{voiceDefinition:event.target.value})}/>
+          <small>图片连到视频节点，并通过 @图片N 引用时，自动添加到视频提示词顶部；原文保持不变。</small>
+        </div>}
         <div className="tn-compose-footer">
           {kind==='image'&&<div className="tn-provider-switch"
             role="group" aria-label="图片生成服务">

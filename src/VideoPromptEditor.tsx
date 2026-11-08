@@ -2,7 +2,7 @@ import {useEffect,useMemo,useRef,useState} from 'react';
 import type {CompositionEvent,KeyboardEvent} from 'react';
 import {createPortal} from 'react-dom';
 import {Image as ImageIcon,AudioLines,Plus,Search,ChevronLeft,ChevronRight} from 'lucide-react';
-import {reorderReferenceNodes} from './doubao';
+import {reorderReferenceNodes,voiceDefinitionsForPrompt} from './doubao';
 import {serializePromptEditor} from './prompt-editor-text.mjs';
 import type {ReferenceNode} from './doubao';
 
@@ -10,6 +10,7 @@ type Props={
   prompt:string;
   references:ReferenceNode[];
   explicitIds:string[];
+  showVoiceDefinitions?:boolean;
   onPrompt:(text:string)=>void;
   onReference:(id:string)=>void;
   onRemove:(id:string)=>void;
@@ -68,7 +69,7 @@ function previewPosition(element:HTMLElement){
 }
 
 export function VideoPromptEditor({
-  prompt,references,explicitIds,onPrompt,onReference,onRemove,onReorder
+  prompt,references,explicitIds,showVoiceDefinitions=false,onPrompt,onReference,onRemove,onReorder
 }:Props){
   const editor=useRef<HTMLDivElement>(null);
   const richPrompt=useRef<HTMLDivElement>(null);
@@ -105,6 +106,11 @@ export function VideoPromptEditor({
     return match?match[1]:null;
   };
   const updateMentionPicker=()=>{
+    if(!references.length){
+      mentionMode.current=false;
+      setPicker(false);
+      return;
+    }
     const query=mentionAtCaret();
     if(query!==null){
       mentionMode.current=true;
@@ -119,6 +125,7 @@ export function VideoPromptEditor({
   // images mentioned in prompt are uploaded by the backend.
   const selected=useMemo(()=>references.filter(r=>r.connected),[references,explicitIds]);
   const used=useMemo(()=>new Set(prompt.match(/@(图片|音频)\d+/g)||[]),[prompt]);
+  const voiceDefinitions=showVoiceDefinitions?voiceDefinitionsForPrompt(prompt,references):[];
   const filtered=useMemo(()=>references.filter(r=>
     (r.title+' '+r.token+' '+(references.indexOf(r)+1)).toLowerCase()
       .includes(search.trim().toLowerCase())),[references,search]);
@@ -225,7 +232,7 @@ export function VideoPromptEditor({
   const onKeyDown=(e:KeyboardEvent<HTMLDivElement>)=>{
     if(e.key==='Escape'){mentionMode.current=false;setPicker(false);setSearch('');return;}
     if(e.nativeEvent.isComposing||composing.current||e.key==='Process'||e.keyCode===229)return;
-    if(e.key==='@'){
+    if(e.key==='@'&&references.length){
       mentionMode.current=true;
       setSearch('');
       setPicker(true);
@@ -324,6 +331,13 @@ export function VideoPromptEditor({
         </button>):<p>{references.length?'没有匹配的素材':'请先连接图片或音频节点。'}</p>}
       </div>}
     </div>
+    {voiceDefinitions.length>0&&<div className="tn-video-voice-prefix"
+      data-testid="video-voice-prefix" aria-label="自动角色音色定义">
+      <div className="tn-video-voice-heading">角色音色定义 <span>自动填入 · 不修改原提示词</span></div>
+      {voiceDefinitions.map(ref=><div className="tn-video-voice-line" key={ref.id}>
+        <strong>{ref.token}（{ref.title}）音色：</strong>{ref.definition}
+      </div>)}
+    </div>}
     <div className={'tn-compose-prompt tn-compose-editor nodrag nowheel'+
       (hasContent?' tn-prompt-has-content':'')+(focused?' tn-editing':'')}
       aria-label="节点生成提示词" role="textbox" aria-multiline="true"
