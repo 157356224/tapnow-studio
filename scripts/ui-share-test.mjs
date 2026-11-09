@@ -98,21 +98,22 @@ try{
   await host.mouse.down();
   await host.mouse.move(grabX+110,grabY+75,{steps:10});
   await host.mouse.up();
-  await guest.waitForFunction(
-    ()=>{const el=document.querySelector('.react-flow__node[data-id="a"]');
-      return Number(el?.getAttribute('style')?.match(/translate\(([-\d.]+)px/)?.[1]||0)>190;},
-    {timeout:12000}
-  ).catch(async()=>{
-    // Style may be managed through a CSS transform matrix instead.
-    await guest.waitForTimeout(650);
-  });
-  assert.ok(projects[0].nodes.find(n=>n.id==='a').position.x>160,
+  for(let attempt=0;attempt<80&&
+    projects[0].nodes.find(n=>n.id==='a').position.x<=160;attempt++)
+    await new Promise(resolve=>setTimeout(resolve,100));
+  const sharedX=projects[0].nodes.find(n=>n.id==='a').position.x;
+  assert.ok(sharedX>160,
     'host drag must persist in shared project');
   const guestA=guest.locator('.react-flow__node[data-id="a"]');
-  await guest.waitForTimeout(350);
-  const moved=await guestA.boundingBox();
-  assert.ok(moved&&moved.x>origin.x+40,
-    'guest must display the host node at its new canvas position');
+  // Screen coordinates differ while each user's viewport is loading and are
+  // intentionally independent. Compare the node's React Flow canvas X instead.
+  await guest.waitForFunction(expectedX=>{
+    const element=document.querySelector('.react-flow__node[data-id="a"]');
+    const style=element?.getAttribute('style')||'';
+    const match=style.match(/translate\(([-\d.]+)px/);
+    return !!match&&Math.abs(Number(match[1])-expectedX)<2;
+  },sharedX,{timeout:12000});
+  assert.ok(await guestA.isVisible());
 
   // Guest creates a node; host must receive it without reloading.
   await guest.locator('button[title="图文节点"]').click();

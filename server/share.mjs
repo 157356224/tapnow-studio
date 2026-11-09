@@ -216,8 +216,14 @@ export function mountShareRoutes(app,{
     }
   }
   function hostOnly(req,res,next){
-    // This app only listens on 127.0.0.1:3701.
-    if(!csrfSafe(req))return fail(res,403,'不允许跨站更改共享设置');
+    // Vite serves the host UI on :5173 and proxies /api to loopback :3701.
+    // Keep the strict same-origin check on the LAN guest server; only this
+    // loopback host route may accept these two exact development origins.
+    const fromHostUI=['http://127.0.0.1:5173','http://localhost:5173']
+      .includes(req.headers.origin)&&
+      req.headers['sec-fetch-site']!=='cross-site';
+    if(!csrfSafe(req)&&!fromHostUI)
+      return fail(res,403,'不允许跨站更改共享设置');
     next();
   }
   const host=express.Router();

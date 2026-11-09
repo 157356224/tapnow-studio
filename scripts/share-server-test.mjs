@@ -41,11 +41,36 @@ const request=async(base,route,method='GET',body,cookie)=>{
 };
 const post=(base,route,body,cookie)=>request(base,route,'POST',body,cookie);
 try{
-  const started=await post(host,'/api/share/start',{
-    projectId:project.id,clientId:'host-client'
+  const blocked=await fetch(host+'/api/share/start',{
+    method:'POST',headers:{'content-type':'application/json',
+      origin:'https://untrusted.example'},
+    body:JSON.stringify({projectId:project.id,clientId:'host-client'})
   });
+  assert.equal(blocked.status,403);
+  const otherPort=await fetch(host+'/api/share/start',{
+    method:'POST',headers:{'content-type':'application/json',
+      origin:'http://127.0.0.1:5174'},
+    body:JSON.stringify({projectId:project.id,clientId:'host-client'})
+  });
+  assert.equal(otherPort.status,403);
+  const crossSite=await fetch(host+'/api/share/start',{
+    method:'POST',headers:{'content-type':'application/json',
+      origin:'http://127.0.0.1:5173','sec-fetch-site':'cross-site'},
+    body:JSON.stringify({projectId:project.id,clientId:'host-client'})
+  });
+  assert.equal(crossSite.status,403);
+  const startedResponse=await fetch(host+'/api/share/start',{
+    method:'POST',headers:{'content-type':'application/json',
+      origin:'http://127.0.0.1:5173','sec-fetch-site':'same-origin'},
+    body:JSON.stringify({projectId:project.id,clientId:'host-client'})
+  });
+  const started={status:startedResponse.status,body:await startedResponse.json()};
   assert.equal(started.status,200);
   assert.match(started.body.code,/^\d{5}$/);
+  const localhostUI=await fetch(host+'/api/share/info',{
+    headers:{origin:'http://localhost:5173','sec-fetch-site':'same-origin'}
+  });
+  assert.equal(localhostUI.status,200);
   const guest='http://127.0.0.1:'+mounted.info().port;
   assert.equal((await request(guest,'/api/projects')).status,401);
   const invalid=await post(guest,'/api/share/join',{code:'abcde'});
