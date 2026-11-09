@@ -178,7 +178,6 @@
 .tn-compose-footer .tn-token{background:#3b3b40;border-radius:22px 0 0 22px;display:flex;align-items:center;gap:7px;padding:9px 7px 9px 10px;font-size:12px}
 .tn-compose-footer .tn-submit{height:32px;width:32px;min-width:32px;background:#a4a5ac;color:#222227;border-radius:50%;display:grid;place-items:center;margin-left:-12px;z-index:1}
 .tn-compose-footer .tn-submit:hover{background:#e5e5ec}
-.tn-app-shell .node-actions{background:#26262b}
 .tn-app-shell .toast{background:#252527;border-color:#55555b}
 
 @media(max-width:760px){

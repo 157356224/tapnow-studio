@@ -1,20 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent, DragEvent, KeyboardEvent as ReactKeyboardEvent } from 'react';
+import type { DragEvent } from 'react';
 import {
   ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, ConnectionLineType,
   SelectionMode, ViewportPortal, addEdge, getNodesBounds, useEdgesState, useNodesState, useReactFlow
 } from '@xyflow/react';
-import type { Connection, Edge, NodeChange } from '@xyflow/react';
+import type { Connection, NodeChange } from '@xyflow/react';
 import {
-  ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUp, AudioLines, Bot, Check, ChevronDown,
-  ChevronLeft, ChevronRight, CircleHelp, Clapperboard, Cloud, Copy, Download,
-  Ellipsis, FilePlus2, FileText, FolderOpen, Grid3X3, Image as ImageIcon, Layers3, LayoutGrid,
-  Maximize, Menu, MessageCircle, Minus, MousePointer2, PanelRightClose, PanelRightOpen,
-  Plus, Redo2, Search, Settings2, Share2, LogIn, SlidersHorizontal, Sparkles, Square,
-  Type, Undo2, Upload, Video, WandSparkles, Workflow, X, ZoomIn, ZoomOut, Play,
-  SquareDashedMousePointer, Trash2, LoaderCircle, CheckCircle2, Shield, Scissors
+  ArrowRight, ArrowUp, AudioLines, ChevronDown, CircleHelp, Clapperboard,
+  FolderOpen, Grid3X3, Image as ImageIcon, Layers3, LayoutGrid,
+  Maximize, MessageCircle, Minus, MousePointer2, Plus, Redo2, Search, Settings2,
+  Share2, LogIn, Sparkles, Square, Type, Undo2, Upload, Video, WandSparkles, X,
+  SquareDashedMousePointer, Trash2, CheckCircle2, Shield, Scissors
 } from 'lucide-react';
-import { StudioActionsContext } from './nodes';
+import { StudioActionsContext } from './StudioActionsContext';
 import { ConnectionHighlightContext,ConnectionInvalidContext,FlowTargetContext,NodeEditorContext,StudioNodeV2 } from './StudioNodeV2';
 import type { ConnectionHighlight,NodeEditorState } from './StudioNodeV2';
 import {FlowEdge} from './FlowEdge';
@@ -25,7 +23,7 @@ import {uuid as uid} from './uuid';
 import {planGroupConnections} from './node-alignment.mjs';
 import {snapNodePositionChanges} from './node-smart-guides.mjs';
 import type {SmartGuides} from './node-smart-guides.mjs';
-import { demoImages, defaultVideoModel, h3VideoModels, kindLabels, models, newData, normalizeVideoNodes, sampleAdCanvas, sampleCanvas, supportedDoubaoVideoModels } from './sample';
+import { defaultVideoModel, h3VideoModels, kindLabels, models, newData, normalizeVideoNodes, sampleAdCanvas, sampleCanvas, supportedDoubaoVideoModels } from './sample';
 import { composeVideoPrompt, referencesForNode, resolveReferences, reorderReferenceNodes } from './doubao';
 import type { DoubaoAccount, DoubaoJob } from './doubao';
 import { AccountsPanel } from './AccountsPanel';
@@ -65,7 +63,6 @@ type H3Job={id:string;status:'queued'|'starting'|'running'|'completed'|'failed'|
   progress:number;message:string;videoUrl?:string;};
 type NodeMenuOrigin = {id:string;side:'source'|'target';dropped:boolean;ids?:string[]};
 type History = { nodes: StudioNode[]; edges: StudioEdge[]; groups: CanvasGroup[] };
-type Plan = { valid: boolean; steps?: {id: string; kind: Kind}[]; skipped?: string[]; error?: string };
 
 // Reject duplicate pairs, reverse links and any edge which would create a cycle.
 function canConnect(source: string, target: string, edges: StudioEdge[]) {
@@ -148,7 +145,6 @@ function Workspace() {
   const [title, setTitle] = useState('Untitled');
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [ready, setReady] = useState(false);
-  const [saveStatus, setSaveStatus] = useState('已保存到本地');
   const [panel, setPanel] = useState<Panel>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [menuOrigin,setMenuOrigin]=useState<NodeMenuOrigin|null>(null);
@@ -157,7 +153,6 @@ function Workspace() {
   const [agentDraft, setAgentDraft] = useState('');
   const [agentKind, setAgentKind] = useState<Kind>('image');
   const [toast, setToast] = useState('');
-  const [running, setRunning] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
   const [showMinimap, setShowMinimap] = useState(false);
@@ -256,7 +251,7 @@ function Workspace() {
     }).catch(error=>setJoinError(error instanceof Error?error.message:'加入失败'));
   },[collaboration.share.role,collaboration.join]);
   const {share,shareRef,active:sharing,locks:shareLocks,online:shareMembers,
-    ownId:shareClientId,flush:flushShared,initializeFromProject,
+    flush:flushShared,initializeFromProject,
     acquire:acquireShareLock,release:releaseShareLock,
     lockedByOther}=collaboration;
   const initializedOnce=useRef(false);
@@ -449,19 +444,15 @@ function Workspace() {
   const saveNow = useCallback(async () => {
     if (!projectId || !ready) return;
     try {
-      setSaveStatus('正在保存…');
       if(['host','guest'].includes(shareRef.current.role)){
         await flushShared();
-        setSaveStatus('正在实时协作');
         return;
       }
       const r=await saveProjectSnapshot(projectId,{
         title,nodes:nodesRef.current,edges:edgesRef.current,viewport:viewport.current
       });
-      setSaveStatus('已保存到本地');
       setProjects(ps => ps.map(p => p.id === projectId ? {...p,title,updatedAt:r.updatedAt} : p));
     } catch (e) {
-      setSaveStatus('保存失败');
       localStorage.setItem('tapnow-local-backup', JSON.stringify({title,nodes:nodesRef.current,
         edges:edgesRef.current,groups:groupsRef.current,
         groupColorCursor:groupColorCursorRef.current,viewport:viewport.current}));
@@ -469,7 +460,6 @@ function Workspace() {
   }, [projectId, ready, title, saveProjectSnapshot,flushShared,shareRef]);
   useEffect(() => {
     if (!ready) return;
-    setSaveStatus('有未保存的更改');
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => { void saveNow(); }, 1000);
     return () => { if (timer.current) clearTimeout(timer.current); };
@@ -832,11 +822,9 @@ function Workspace() {
             jobMessage:'ChatGPT 生图准备中'}}
           :node);
         nodesRef.current=staged;setNodes(staged);
-        setSaveStatus('正在保存…');
         const saved=await saveProjectSnapshot(projectId,{
           title,nodes:staged,edges:edgesRef.current,viewport:viewport.current
         });
-        setSaveStatus('已保存到本地');
         setProjects(ps=>ps.map(item=>item.id===projectId
           ?{...item,updatedAt:saved.updatedAt}:item));
         const job=await request<ChatGPTImageJob>('/api/chatgpt/jobs',JSONBody({
@@ -909,11 +897,9 @@ function Workspace() {
             progress:0,jobMessage:'H3 正在准备提交'}}
           :node);
         nodesRef.current=staged;setNodes(staged);
-        setSaveStatus('正在保存…');
         const saved=await saveProjectSnapshot(projectId,{
           title,nodes:staged,edges:edgesRef.current,viewport:viewport.current
         });
-        setSaveStatus('已保存到本地');
         setProjects(ps=>ps.map(p=>p.id===projectId
           ?{...p,updatedAt:saved.updatedAt}:p));
         const job=await request<H3Job>('/api/h3/jobs',JSONBody({
@@ -985,11 +971,9 @@ function Workspace() {
             status:'queued' as const,progress:0,
             jobMessage:'Muse：正在启动独立 Edge 并准备新建会话'}}:node);
         nodesRef.current=staged;setNodes(staged);
-        setSaveStatus('正在保存…');
         const saved=await saveProjectSnapshot(projectId,{
           title,nodes:staged,edges:edgesRef.current,viewport:viewport.current
         });
-        setSaveStatus('已保存到本地');
         setProjects(ps=>ps.map(p=>p.id===projectId?
           {...p,updatedAt:saved.updatedAt}:p));
         const job=await request<MuseJob>('/api/muse/jobs',JSONBody({
@@ -1073,11 +1057,9 @@ function Workspace() {
           : n);
         nodesRef.current=stagedNodes;
         setNodes(stagedNodes);
-        setSaveStatus('正在保存…');
         const saved=await saveProjectSnapshot(projectId,{
           title,nodes:stagedNodes,edges:edgesRef.current,viewport:viewport.current
         });
-        setSaveStatus('已保存到本地');
         setProjects(ps=>ps.map(p=>p.id===projectId?{...p,updatedAt:saved.updatedAt}:p));
         const job=await request<DoubaoJob>('/api/doubao/jobs',JSONBody({
           projectId,nodeId:id,accountId:source.data.accountId,
@@ -1135,28 +1117,6 @@ function Workspace() {
       generatingNodeIds.current.delete(id);
     }
   },[snapshot,update,setNodes,setEdges,notify,projectId,referencesFor,title,museAccounts.length,saveProjectSnapshot]);
-  const runWorkflow=useCallback(async()=>{
-    if(running || !nodesRef.current.length)return;
-    try{
-      const plan=await request<Plan>('/api/workflow/plan',JSONBody({nodes:nodesRef.current,edges:edgesRef.current}));
-      if(!plan.valid){notify(plan.error||'工作流验证失败');return;}
-      setRunning(true);
-      let count=0;
-      for(const step of plan.steps||[]){
-        if(step.kind==='text')continue;
-        const item=nodesRef.current.find(n=>n.id===step.id);
-        if(!item)continue;
-        update(step.id,{status:'running',progress:12});
-        for(const n of [34,63,89,100]){await pause(160);update(step.id,{progress:n});}
-        if(!item.data.mediaUrl && step.kind!=='audio')
-          update(step.id,{mediaUrl:mockPoster(step.kind,item.data.prompt),demo:true,status:'done'});
-        else update(step.id,{status:'done'});
-        count++;
-      }
-      notify('演示执行完成：'+count+' 个任务，跳过 '+(plan.skipped?.length||0)+' 个节点');
-    }catch(e){notify('运行失败：'+(e as Error).message)}
-    finally{setRunning(false)}
-  },[running,update,notify]);
   const expand = useCallback((id:string) => { setPreview(id); },[]);
   const inspect = useCallback((id:string) => {
     setNodes(prev=>prev.map(n=>({...n,selected:n.id===id})));

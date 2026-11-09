@@ -13,7 +13,6 @@ type Props={
   showVoiceDefinitions?:boolean;
   onPrompt:(text:string)=>void;
   onReference:(id:string)=>void;
-  onRemove:(id:string)=>void;
   onReorder:(id:string,direction:-1|1,currentPrompt:string)=>void;
 };
 
@@ -69,7 +68,7 @@ function previewPosition(element:HTMLElement){
 }
 
 export function VideoPromptEditor({
-  prompt,references,explicitIds,showVoiceDefinitions=false,onPrompt,onReference,onRemove,onReorder
+  prompt,references,explicitIds,showVoiceDefinitions=false,onPrompt,onReference,onReorder
 }:Props){
   const editor=useRef<HTMLDivElement>(null);
   const richPrompt=useRef<HTMLDivElement>(null);

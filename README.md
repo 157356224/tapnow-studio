@@ -10,7 +10,7 @@
 6. 用户2生成的图片或视频由用户1的本地生成 API 执行，回传到用户1电脑的 server/uploads 目录，项目记录保存在 server/data/projects.json。协作者使用主机已有的生成账号，但无法访问主机账号管理和登录接口。
 7. 用户1可通过共享面板结束共享，旧的加入码及会话立即失效。
 
-局域网网页由主机单独监听 TCP 3702；主机账号 API 仍只在 127.0.0.1:3701 上监听。首次共享时如果没有构建产物，会自动生成局域网网页。若 Windows 防火墙拦截访问，在**管理员 PowerShell** 中执行 scripts/allow-lan-firewall.ps1，放行专用网络 TCP 3702。用户2必须访问用户1的局域网 IP，不能访问用户2自己的 127.0.0.1。
+局域网网页由主机单独监听 TCP 3702；主机账号 API 仍只在 127.0.0.1:3701 上监听。每次开启共享都会重新构建局域网网页，避免旧版构建导致协作者黑屏。若 Windows 防火墙拦截访问，在**管理员 PowerShell** 中执行 scripts/allow-lan-firewall.ps1，放行专用网络 TCP 3702。用户2必须访问用户1的局域网 IP，不能访问用户2自己的 127.0.0.1。
 
 共享功能测试：npm run test:share-sync、npm run test:share-server、npm run test:share-media、npm run test:share-ui。
 

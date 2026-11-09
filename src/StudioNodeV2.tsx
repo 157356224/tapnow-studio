@@ -6,12 +6,12 @@ import type { NodeProps } from '@xyflow/react';
 import {
   Image as ImageIcon, Video, AlignLeft, AudioLines, Upload, Plus, Tag, Copy,
   FolderPlus, Maximize2, ChevronDown, ArrowUp, Sparkles, Check,
-  Play, MoreHorizontal, Trash2, X, Settings2, RotateCw, WandSparkles,
-  CircleHelp, MousePointer2, LogIn, Gem, Volume2, Download, Pencil, ImagePlus,
+  Play, Trash2, Settings2,
+  LogIn, Gem, Volume2, Download, Pencil, ImagePlus,
   Film
 } from 'lucide-react';
-import { StudioActionsContext } from './nodes';
-import type { Kind, StudioNode } from './types';
+import { StudioActionsContext } from './StudioActionsContext';
+import type { StudioNode } from './types';
 import { defaultVideoModel, h3VideoModelOptions, models, videoModelOptions } from './sample';
 import { VideoPromptEditor } from './VideoPromptEditor';
 import { ComposingTextarea } from './ComposingTextarea';
@@ -163,7 +163,6 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
   const nameRef=useRef<HTMLInputElement>(null);
   const [textDraft,setTextDraft]=useState(data.text||'');
   const textComposing=useRef(false);
-  const [menu, setMenu] = useState(false);
   const [showModel, setShowModel] = useState(false);
   const [costQuote,setCostQuote]=useState<{credits:number;yuan:number}|null>(null);
   const [costLoading,setCostLoading]=useState(false);
@@ -326,7 +325,6 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
     };
   },[]);
   const fileAccept = kind === 'image' ? 'image/*' : kind === 'video' ? 'video/*' : 'audio/*';
-  const upstream = kind === 'video' ? 'image' : 'text';
   const downstream = kind === 'text' ? 'image' : kind === 'image' ? 'video' : 'image';
   const isVideo = kind === 'video' && !!data.mediaUrl && !data.demo &&
     /\.(mp4|mov|webm|ogg)(\?|$)/i.test(data.mediaUrl);
@@ -559,13 +557,6 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
           onReference={referenceId=>api.update(id,{
             referenceIds:[...new Set([...(data.referenceIds||[]),referenceId])]
           })}
-          onRemove={referenceId=>{
-            const ref=references.find(r=>r.id===referenceId);
-            api.update(id,{
-              referenceIds:(data.referenceIds||[]).filter(x=>x!==referenceId),
-              prompt:ref?(data.prompt||'').replaceAll(ref.token,''):data.prompt
-            });
-          }}
         />:<ComposingTextarea
           className="tn-compose-prompt"
           label="节点生成提示词"

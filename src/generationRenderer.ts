@@ -2,7 +2,6 @@
 // Coordinates are a SINGLE fixed grid used by the ascending ring, random
 // stars and the horizontally sweeping light. Nothing shifts the points.
 export type Dot={x:number;y:number;radius:number;size:number;twinkle:boolean;period:number;phase:number};
-const TAU=Math.PI*2;
 function randomFor(id:string){
   let seed=0x68c29e57;
   for(let i=0;i<id.length;i++)seed=(Math.imul(seed,33)^id.charCodeAt(i))>>>0;
