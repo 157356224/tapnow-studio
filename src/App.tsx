@@ -20,6 +20,7 @@ import type { ConnectionHighlight,NodeEditorState } from './StudioNodeV2';
 import {FlowEdge} from './FlowEdge';
 import {SelectionGroupControls} from './SelectionGroupControls';
 import {CanvasGroupLayer} from './CanvasGroupLayer';
+import {useSharedCanvas} from './useSharedCanvas';
 import {planGroupConnections} from './node-alignment.mjs';
 import {snapNodePositionChanges} from './node-smart-guides.mjs';
 import type {SmartGuides} from './node-smart-guides.mjs';
@@ -109,6 +110,10 @@ function Workspace() {
   const [nodes, setNodes, onNodesChange] = useNodesState<StudioNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<StudioEdge>([]);
   const [groups, setGroups] = useState<CanvasGroup[]>([]);
+  const [sharePopup,setSharePopup]=useState(false);
+  const [shareStarting,setShareStarting]=useState(false);
+  const [joinCode,setJoinCode]=useState('');
+  const [joinError,setJoinError]=useState('');
   const [projectId, setProjectId] = useState('');
   const [title, setTitle] = useState('Untitled');
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -203,6 +208,28 @@ function Workspace() {
   ),[edges,selectedSourceIds]);
 
   const notify = useCallback((message: string) => setToast(message), []);
+  const collaboration=useSharedCanvas({
+    projectId,ready,nodes,edges,groups,title,groupColorCursor:groupColorCursorRef,
+    nodesRef,edgesRef,groupsRef,setNodes,setEdges,setGroups,setTitle,notify
+  });
+  const {share,shareRef,active:sharing,locks:shareLocks,online:shareMembers,
+    ownId:shareClientId,flush:flushShared,initializeFromProject,
+    acquire:acquireShareLock,release:releaseShareLock,
+    lockedByOther}=collaboration;
+  const initializedOnce=useRef(false);
+  const visibleNodes=useMemo(()=>sharing
+    ?nodes.map(node=>{
+      const label=lockedByOther(node.id);
+      return label
+        ?{...node,draggable:false,selectable:false,
+          data:{...node.data,__collabLockedBy:label}}
+        :node;
+    })
+    :nodes,[sharing,nodes,shareLocks,lockedByOther]);
+  useEffect(()=>{
+    if(editorState.id&&lockedByOther(editorState.id))
+      setEditorState({id:null,instant:true});
+  },[shareLocks,editorState.id,lockedByOther]);
   const refreshDoubaoAccounts=useCallback(async()=>{
     try{
       const fresh=await request<DoubaoAccount[]>('/api/doubao/accounts');
@@ -299,10 +326,15 @@ function Workspace() {
 
   const openProject = useCallback(async (id: string) => {
     try {
+      if(shareRef.current.role==='guest'&&id!==shareRef.current.projectId)
+        throw new Error('协作者只能打开当前共享画布');
+      if(shareRef.current.role==='host'&&id!==shareRef.current.projectId)
+        await collaboration.stop();
       for(const pending of removalTimers.current.values())window.clearTimeout(pending);
       removalTimers.current.clear();
       setReady(false);
       const p = await request<Project>('/api/projects/' + id);
+      initializeFromProject(p);
       setProjectId(p.id); setTitle(p.title); setNodes(normalizeVideoNodes(p.nodes)); setEdges(p.edges);
       setGroups(Array.isArray(p.groups)?p.groups:[]);
       groupColorCursorRef.current=Math.max(p.groupColorCursor||0,p.groups?.length||0);
@@ -311,14 +343,21 @@ function Workspace() {
       setPanel(null);
       setTimeout(() => { void rf.setViewport(p.viewport, {duration:300}); setReady(true); }, 60);
     } catch (e) { notify('打开项目失败：' + (e as Error).message); setReady(true); }
-  }, [rf, setNodes, setEdges, notify]);
+  }, [rf, setNodes, setEdges, notify,initializeFromProject,collaboration.stop,shareRef]);
   useEffect(() => {
+    if(share.role==='loading'||share.role==='join'||initializedOnce.current)return;
+    initializedOnce.current=true;
     let active = true;
     const init = async () => {
       try {
         const list = await request<ProjectSummary[]>('/api/projects');
         if (!active) return;
-        if (list.length) { setProjects(list); await openProject(list[0].id); }
+        if (list.length) {
+          setProjects(list);
+          const shared=share.role==='host'||share.role==='guest'
+            ?share.projectId:list[0].id;
+          await openProject(list.find(item=>item.id===shared)?.id||list[0].id);
+        }
         else {
           const p = await request<Project>('/api/projects', JSONBody({
             title: 'Creative OS 新画布', nodes:[],edges:[],groups:[],groupColorCursor:0,
@@ -336,7 +375,13 @@ function Workspace() {
     };
     void init();
     return () => { active = false; };
-  }, []); // one-time initial load
+  }, [share.role,share.projectId]); // initialize once after share role is known
+  useEffect(()=>{
+    if(share.role==='guest'&&ready&&projectId&&share.projectId&&
+       projectId!==share.projectId){
+      void openProject(share.projectId);
+    }
+  },[share.role,share.projectId,projectId,ready,openProject]);
 
   // Serialize full-project PUTs. Two fast submissions used to race: a stale
   // snapshot from node A could arrive AFTER node B's queued state was saved.
@@ -344,6 +389,9 @@ function Workspace() {
   const saveProjectSnapshot=useCallback((
     id:string,content:Pick<Project,'title'|'nodes'|'edges'|'viewport'>
   )=>{
+    if(['host','guest'].includes(shareRef.current.role)&&
+       shareRef.current.projectId===id)
+      return flushShared().then(()=>({id,updatedAt:new Date().toISOString()}));
     const payload={...content,groups:structuredClone(groupsRef.current),
       groupColorCursor:groupColorCursorRef.current};
     const task=projectSaveTail.current.then(()=>request<{id:string;updatedAt:string}>(
@@ -354,11 +402,16 @@ function Workspace() {
     ));
     projectSaveTail.current=task.then(()=>{},()=>{});
     return task;
-  },[]);
+  },[flushShared,shareRef]);
   const saveNow = useCallback(async () => {
     if (!projectId || !ready) return;
     try {
       setSaveStatus('正在保存…');
+      if(['host','guest'].includes(shareRef.current.role)){
+        await flushShared();
+        setSaveStatus('正在实时协作');
+        return;
+      }
       const r=await saveProjectSnapshot(projectId,{
         title,nodes:nodesRef.current,edges:edgesRef.current,viewport:viewport.current
       });
@@ -370,7 +423,7 @@ function Workspace() {
         edges:edgesRef.current,groups:groupsRef.current,
         groupColorCursor:groupColorCursorRef.current,viewport:viewport.current}));
     }
-  }, [projectId, ready, title, saveProjectSnapshot]);
+  }, [projectId, ready, title, saveProjectSnapshot,flushShared,shareRef]);
   useEffect(() => {
     if (!ready) return;
     setSaveStatus('有未保存的更改');
@@ -380,6 +433,9 @@ function Workspace() {
   }, [nodes, edges, groups, title, ready, viewportRevision, saveNow]);
 
   const createProject = useCallback(async (name='Untitled', template:'blank'|'demo'|'ad'='blank') => {
+    if(shareRef.current.role==='guest'){
+      notify('协作者不能创建新的主机画布');return;
+    }
     try {
       const content = template === 'demo' ? sampleCanvas() : template === 'ad' ? sampleAdCanvas() : {nodes:[],edges:[]};
       const p = await request<Project>('/api/projects', JSONBody({title:name, ...content,
@@ -391,6 +447,9 @@ function Workspace() {
     } catch (e) { notify('创建失败：' + (e as Error).message); }
   }, [openProject, notify, rf]);
   const deleteProject = async (id:string) => {
+    if(shareRef.current.role==='guest'){
+      notify('协作者不能删除主机画布');return;
+    }
     if (projects.length <= 1) { notify('请先创建另一个画布'); return; }
     if (!confirm('确定删除此画布吗？此操作不可撤销。')) return;
     try {
@@ -1224,12 +1283,14 @@ function Workspace() {
   const handleNodeDragStart=useCallback((
     _event:MouseEvent|TouchEvent,node:StudioNode
   )=>{
+    if(lockedByOther(node.id))return;
+    void acquireShareLock(node.id);
     nodeDragActive.current=true;
     setSmartGuides(null);
     setDraggingNodeId(node.id);
     setEditorState({id:null,instant:true});
     snapshot();
-  },[snapshot]);
+  },[snapshot,lockedByOther,acquireShareLock]);
   const handleNodeDragStop=useCallback(()=>{
     nodeDragActive.current=false;
     setSmartGuides(null);
@@ -1241,11 +1302,12 @@ function Workspace() {
   },[]);
   const handleSelectionEnd=useCallback(()=>setMarqueeSelecting(false),[]);
   const handlePaneClick=useCallback(()=>{
+    releaseShareLock();
     setEditorState({id:null,instant:false});
     setShowAdd(false);
     setMenuSearch('');
     setMenuOrigin(null);
-  },[]);
+  },[releaseShareLock]);
   const handlePaneContext=useCallback((e:{preventDefault:()=>void})=>{
     e.preventDefault();
     setShowAdd(false);
@@ -1290,6 +1352,8 @@ function Workspace() {
     }
   };
   const onNodeClick = (_event: React.MouseEvent, node: StudioNode) => {
+    if(lockedByOther(node.id))return;
+    void acquireShareLock(node.id);
     setEditorState({id:node.id,instant:false});
     const container=rootRef.current?.querySelector('.canvas-container');
     const nodeElement=[...document.querySelectorAll('.react-flow__node')].find(el=>el.getAttribute('data-id')===node.id);
@@ -1431,29 +1495,93 @@ function Workspace() {
         <span className="tn-project-logo"><span className="brand-mark"><i/><i/><i/><i/></span></span>
         <span className="tn-top-divider"/>
         <input value={title} onChange={e=>setTitle(e.target.value)} maxLength={100} aria-label="画布名称"/>
-        <button title="切换画布" onClick={()=>setPanel(panel==='projects'?null:'projects')}><ChevronDown size={13}/></button>
+        <button title="切换画布" disabled={share.role==='guest'}
+          onClick={()=>setPanel(panel==='projects'?null:'projects')}><ChevronDown size={13}/></button>
       </div>
       <div className="tn-top-actions">
+        <button type="button" className={'tn-share-entry'+(sharing?' is-sharing':'')}
+          title="局域网共享画布" aria-label="局域网共享画布"
+          onClick={()=>setSharePopup(current=>!current)}>
+          <Share2 size={16}/><span>{share.role==='guest'?'协作中':sharing?'正在共享':'共享画布'}</span>
+        </button>
         <button title="添加到画布" onClick={()=>{setMenuOrigin(null);setShowAdd(true)}}><Plus size={17}/></button>
         <button title="创建彩色分组" aria-label="创建彩色分组" onClick={createGroup}><Square size={17}/></button>
         <button title="导入工作流" onClick={()=>importPicker.current?.click()}><Upload size={16}/></button>
         <button title="保存工作流 JSON" onClick={exportJSON}><Share2 size={16}/></button>
         <span className="tn-top-divider"/>
         <button title="素材库" onClick={()=>setPanel('assets')}><Layers3 size={16}/></button>
-        <button title="豆包账号与独立浏览器设置" onClick={()=>setPanel(panel==='doubao'?null:'doubao')}><Settings2 size={17}/></button>
-        <button className="tn-muse-account-link" aria-label="Muse 账号管理"
+        {share.role!=='guest'&&<button title="豆包账号与独立浏览器设置" onClick={()=>setPanel(panel==='doubao'?null:'doubao')}><Settings2 size={17}/></button>}
+        {share.role!=='guest'&&<button className="tn-muse-account-link" aria-label="Muse 账号管理"
           title="Muse 账号与独立 Edge 浏览器管理"
           onClick={()=>setPanel(panel==='muse'?null:'muse')}>
           <Shield size={15}/><span>Muse 账号</span>
-        </button>
-        <button className="tn-muse-account-link" aria-label="H3 API 设置"
+        </button>}
+        {share.role!=='guest'&&<button className="tn-muse-account-link" aria-label="H3 API 设置"
           title="元铂AI H3 API Key"
           onClick={()=>setPanel(panel==='h3'?null:'h3')}>
           <Sparkles size={15}/><span>H3 API</span>
-        </button>
+        </button>}
         <button title="工作流模板" onClick={()=>setShowTemplates(true)}><LayoutGrid size={16}/></button>
       </div>
     </div>
+    {sharePopup&&<div className="tn-share-popover" data-testid="share-popover">
+      <div className="tn-share-heading"><strong>局域网团队共享</strong>
+        <button aria-label="关闭共享设置" onClick={()=>setSharePopup(false)}><X size={15}/></button>
+      </div>
+      {sharing&&<div className="tn-share-members">已连接：{shareMembers.length
+        ?shareMembers.map(member=>member.label).join('、')
+        :(share.role==='host'?'用户1（主机）':share.label||'协作者')}</div>}
+      {share.role==='host'?<>
+        <p>5 位加入码</p>
+        <div className="tn-share-code" data-testid="share-code">{share.code}</div>
+        <button className="tn-share-copy" onClick={()=>void navigator.clipboard?.writeText(share.code||'')}>
+          复制加入码
+        </button>
+        <p>把下方局域网地址发给用户2，用户2打开后输入加入码：</p>
+        {(share.links||[]).map(link=><div key={link} className="tn-share-link">
+          <span>{link}</span>
+          <button onClick={()=>void navigator.clipboard?.writeText(link)}>复制</button>
+        </div>)}
+        <button className="tn-share-danger" onClick={()=>void collaboration.stop()
+          .then(()=>{setSharePopup(false);notify('已关闭共享画布');})
+          .catch(error=>notify(error.message))}>结束共享</button>
+      </>:share.role==='guest'?<>
+        <p>已加入用户1的画布。你添加或生成的节点、图片和视频保存在主机电脑。</p>
+        <button className="tn-share-danger" onClick={()=>void collaboration.leave()
+          .then(()=>setSharePopup(false)).catch(error=>notify(error.message))}>退出共享</button>
+      </>:<>
+        <p>主机共享当前画布，其他电脑通过局域网地址和 5 位加入码协作。</p>
+        <button className="tn-share-start" disabled={!ready||share.role==='loading'||shareStarting}
+          onClick={()=>void (async()=>{
+            try{
+              setShareStarting(true);
+              await saveNow();
+              await collaboration.start();
+              notify('共享已开启，把加入码和局域网地址发给协作者');
+            }catch(error){notify('启动共享失败：'+(error as Error).message);}
+            finally{setShareStarting(false);}
+          })()}>{shareStarting?'正在启动共享…':'开启共享画布'}</button>
+      </>}
+    </div>}
+    {share.role==='join'&&<div className="tn-share-join-screen">
+      <div className="tn-share-join-card">
+        <strong>加入团队共享画布</strong>
+        <p>请输入主机提供的 5 位数字加入码。画布和生成素材保存在主机电脑。</p>
+        <form onSubmit={event=>{
+          event.preventDefault();
+          setJoinError('');
+          void collaboration.join(joinCode).then(()=>{
+            setSharePopup(false);setJoinCode('');
+          }).catch(error=>setJoinError(error.message));
+        }}>
+          <input aria-label="5位加入码" inputMode="numeric" autoComplete="one-time-code"
+            maxLength={5} value={joinCode}
+            onChange={event=>setJoinCode(event.target.value.replace(/\D/g,''))}/>
+          <button disabled={!/^\d{5}$/.test(joinCode)}>加入画布</button>
+        </form>
+        {joinError&&<p className="tn-share-error">{joinError}</p>}
+      </div>
+    </div>}
     <input ref={filePicker} hidden type="file" multiple accept="image/*,video/*,audio/*" onChange={e=>{
       if(e.target.files)void uploadFiles(e.target.files);e.target.value='';
     }}/>
@@ -1463,6 +1591,17 @@ function Workspace() {
     <div className="work-area">
       <div className={'canvas-container'+(cutMode?' tn-cut-mode':'')+(selectedSourceIds.size>1?' tn-multi-selection':'')}
         onDoubleClickCapture={onCanvasDoubleClick}
+        onPointerDownCapture={event=>{
+          if(!sharing)return;
+          const target=event.target as HTMLElement;
+          const node=target.closest<HTMLElement>('.react-flow__node[data-id]');
+          const id=node?.dataset.id;
+          if(!id)return;
+          if(lockedByOther(id)){
+            event.stopPropagation();event.preventDefault();
+            notify(lockedByOther(id)+' 正在使用此节点');
+          }else void acquireShareLock(id);
+        }}
         onDragOver={onDragOver} onDrop={onDrop}
         onContextMenu={e=>{e.preventDefault();setShowAdd(false);setMenuOrigin(null);setMenuSearch('');}}>
         <StudioActionsContext.Provider value={actions}>
@@ -1471,7 +1610,7 @@ function Workspace() {
           <FlowTargetContext.Provider value={flowTargetIds}>
           <NodeEditorContext.Provider value={editorState}>
           <ReactFlow
-            nodes={nodes} edges={renderedEdges}
+            nodes={visibleNodes} edges={renderedEdges}
             nodeTypes={nodeTypes} edgeTypes={edgeTypes} onNodesChange={changeCanvasNodes} onEdgesChange={onEdgesChange} onConnect={onConnect}
             isValidConnection={validConnection}
             onConnectStart={onConnectStart}

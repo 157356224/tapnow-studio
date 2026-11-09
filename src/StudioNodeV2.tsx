@@ -399,6 +399,12 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
           <span>{data.title||TITLE[kind]}</span><Pencil size={11}/>
         </button>}
     </div>
+    {typeof data.__collabLockedBy==='string'&&<div className="tn-share-node-locked"
+      data-testid="shared-node-locked"
+      onPointerDown={event=>{event.stopPropagation();event.preventDefault();}}
+      onMouseDown={event=>{event.stopPropagation();event.preventDefault();}}>
+      <span>{data.__collabLockedBy} 正在使用</span>
+    </div>}
     <div className="tn-node-frame">
       {kind === 'text' ? <textarea
         ref={textRef}

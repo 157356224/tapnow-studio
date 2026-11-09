@@ -11,6 +11,7 @@ import {preserveMuseCompletedMedia} from './muse-project.mjs';
 import {extractVideoLastFrame,extractVideoFrameAt} from './video-last-frame.mjs';
 import {mountH3Routes} from './yuanbo-h3.mjs';
 import {mountChatGPTRoutes,preserveChatGPTCompletedMedia} from './chatgpt.mjs';
+import {mountShareRoutes} from './share.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.join(root, 'data');
@@ -60,6 +61,7 @@ const upload = multer({
 
 app.get('/api/health', (_req, res) => res.json({
   ok:true,mode:'local-canvas',aiProviders:0,
+  lanShareRevision:'sse-collab-v1',
   browserBridges:['doubao-seedance-v2','muse-edge-chat'],
   museBridgeRevision:'quota-auto-v6-image-resolution',
   museMediaRevision:'fresh-chat-media-v2',
@@ -178,6 +180,7 @@ mountDoubaoRoutes(app,read,write);
 mountMuseRoutes(app,read,write);
 mountH3Routes(app,read,write,{dataDir,uploadDir});
 mountChatGPTRoutes(app,read,write,{dataDir,uploadDir});
+mountShareRoutes(app,{read,write,root,uploadDir});
 function planWorkflow(nodes, edges) {
   const lookup = new Map(nodes.map(x => [x.id, x]));
   const indegree = new Map(nodes.map(x => [x.id, 0]));

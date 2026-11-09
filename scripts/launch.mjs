@@ -104,6 +104,9 @@ async function main(){
       throw new Error('端口 3701 仍在运行旧版豆包多图上传服务。'+
         '请先关闭旧的 TapNow API 进程（node server/index.mjs），'+
         '然后重新运行 start.bat；不能直接复用旧进程。');
+    if(health.lanShareRevision!=='sse-collab-v1')
+      throw new Error('端口 3701 正在运行不支持局域网共享的旧版 API。'+
+        '请结束旧的 TapNow 服务并重新运行 start.bat。');
     if(health.videoModelRevision!=='mini-fast-v1')
       throw new Error('端口 3701 正在运行旧版视频模型服务，无法保证选用 Seedance 2.0 Mini。'+
         '请先关闭旧的 TapNow API 进程，再运行当前项目的 start.bat。');
