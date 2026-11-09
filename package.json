@@ -4,9 +4,11 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "node scripts/bootstrap.mjs && node scripts/launch.mjs",
+    "dev": "node scripts/stop-ports.mjs && node scripts/bootstrap.mjs && node scripts/launch.mjs",
     "update": "node scripts/bootstrap.mjs",
     "test:updater": "node scripts/bootstrap-test.mjs",
+    "test:ports": "node scripts/ports-test.mjs",
+    "test:start-bat": "node scripts/start-bat-test.mjs",
     "web": "vite --host 127.0.0.1",
     "server": "node server/index.mjs",
     "build": "tsc -b && vite build",

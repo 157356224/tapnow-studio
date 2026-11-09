@@ -42,6 +42,12 @@ try{
   const first=syncGit({root:local,log:quiet});
   assert.equal(first.updated,false);
   assert.equal(first.skipped,'current');
+  write(local,'changed.txt','local edit on current commit');
+  const sameCommitDirty=syncGit({root:local,log:quiet});
+  assert.equal(sameCommitDirty.updated,true);
+  assert.equal(sameCommitDirty.oldHead,sameCommitDirty.newHead);
+  assert.ok(sameCommitDirty.backupStash);
+  assert.equal(fs.readFileSync(path.join(local,'changed.txt'),'utf8'),'version-one');
 
   write(publisher,'changed.txt','version-two');
   call(publisher,['add','.']);
@@ -62,9 +68,47 @@ try{
   call(publisher,['commit','-m','Version three']);
   call(publisher,['push','origin','main']);
   const dirty=syncGit({root:local,log:quiet});
-  assert.equal(dirty.skipped,'local-changes');
+  assert.equal(dirty.updated,true);
+  assert.equal(dirty.newHead,call(local,['rev-parse','HEAD']));
+  assert.ok(dirty.backupStash,'Dirty tracked files must be backed up');
   assert.equal(fs.readFileSync(path.join(local,'changed.txt'),'utf8'),
-    'my-uncommitted-local-work','Dirty files must never be overwritten');
+    'version-three','Dirty tracked files must not block GitHub updates');
+  const stashPatch=call(local,['show',dirty.backupStash+':changed.txt']);
+  assert.equal(stashPatch,'my-uncommitted-local-work',
+    'Previous local edits must remain recoverable from the saved stash');
+  assert.equal(fs.readFileSync(path.join(local,'server/data/private.json'),'utf8'),
+    'PRIVATE_LOCAL_DATA_STAYS');
+
+  // A local-only commit should not permanently block the published main.
+  write(local,'changed.txt','local committed experiment');
+  call(local,['config','user.name','Updater Test']);
+  call(local,['config','user.email','updater-test@example.invalid']);
+  call(local,['add','changed.txt']);
+  call(local,['commit','-m','Local experiment']);
+  const localCommit=call(local,['rev-parse','HEAD']);
+  write(publisher,'changed.txt','version-four');
+  call(publisher,['add','.']);
+  call(publisher,['commit','-m','Version four']);
+  call(publisher,['push','origin','main']);
+  const diverged=syncGit({root:local,log:quiet});
+  assert.equal(diverged.updated,true);
+  assert.ok(diverged.backupBranch);
+  assert.equal(call(local,['rev-parse',diverged.backupBranch]),localCommit);
+  assert.equal(fs.readFileSync(path.join(local,'changed.txt'),'utf8'),'version-four');
+
+  // A future tracked file must not erase an existing user's untracked file.
+  write(local,'newfeature.txt','my private untracked version');
+  write(publisher,'newfeature.txt','published release version');
+  call(publisher,['add','.']);
+  call(publisher,['commit','-m','Publish a new file']);
+  call(publisher,['push','origin','main']);
+  const collision=syncGit({root:local,log:quiet});
+  assert.equal(collision.updated,true);
+  assert.ok(collision.backupUntracked);
+  assert.equal(fs.readFileSync(path.join(local,'newfeature.txt'),'utf8'),
+    'published release version');
+  assert.equal(fs.readFileSync(path.join(collision.backupUntracked,
+    'newfeature.txt'),'utf8'),'my private untracked version');
 
   const moduleRoot=path.join(temp,'dependencies');
   fs.mkdirSync(moduleRoot);

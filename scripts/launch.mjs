@@ -1,41 +1,18 @@
-import crypto from 'node:crypto';
-import fs from 'node:fs';
-import net from 'node:net';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import {releasePorts} from './ports-core.mjs';
 
 const projectDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
-const shareSourceRevision=crypto.createHash('sha256')
-  .update(fs.readFileSync(path.join(projectDir,'server','share.mjs')))
-  .digest('hex').slice(0,16);
 const base='http://127.0.0.1';
 const apiPort=3701;
 const webPort=5173;
 const apiUrl=base+':'+apiPort;
 const webUrl=base+':'+webPort+'/';
-const instanceId=crypto.createHash('sha256').update(
-  process.platform==='win32'?projectDir.toLowerCase():projectDir
-).digest('hex').slice(0,16);
 const children=new Map();
 let shuttingDown=false;
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-async function portListening(port){
-  return await new Promise(resolve=>{
-    const socket=net.connect({host:'127.0.0.1',port});
-    let settled=false;
-    const finish=answer=>{
-      if(settled)return;
-      settled=true;
-      socket.destroy();
-      resolve(answer);
-    };
-    socket.once('connect',()=>finish(true));
-    socket.once('error',()=>finish(false));
-    socket.setTimeout(800,()=>finish(false));
-  });
-}
 async function apiHealth(){
   try{
     const reply=await fetch(apiUrl+'/api/health',{
@@ -89,79 +66,26 @@ async function shutdown(){
   for(const child of children.values()){
     try{child.kill('SIGTERM');}catch{}
   }
-  // Never terminate pre-existing servers that were only reused.
 }
 process.on('SIGINT',()=>void shutdown());
 process.on('SIGTERM',()=>void shutdown());
 
 async function main(){
-  const apiOccupied=await portListening(apiPort);
-  if(apiOccupied){
-    const health=await apiHealth();
-    if(!health)throw new Error(
-      '端口 3701 已被其他程序占用，且不是 TapNow API。请关闭该程序后重试。'
-    );
-    if(health.workspaceId&&health.workspaceId!==instanceId)
-      throw new Error('端口 3701 上运行的是另一个 TapNow 项目。'+
-        '请先关闭旧项目的启动窗口，再运行当前目录的 start.bat。');
-    if(health.shareSourceRevision!==shareSourceRevision)
-      throw new Error('端口 3701 仍在运行旧版共享画布服务。'+
-        '请关闭旧的 TapNow 启动窗口/服务进程，然后重新运行 start.bat。'+
-        '只更新 GitHub 代码不会自动替换已经运行的 Node.js 进程。');
-    if(health.multiImageUploadRevision!=='v3-prompt-first')
-      throw new Error('端口 3701 仍在运行旧版豆包多图上传服务。'+
-        '请先关闭旧的 TapNow API 进程（node server/index.mjs），'+
-        '然后重新运行 start.bat；不能直接复用旧进程。');
-    if(health.lanShareRevision!=='sse-collab-v1')
-      throw new Error('端口 3701 正在运行不支持局域网共享的旧版 API。'+
-        '请结束旧的 TapNow 服务并重新运行 start.bat。');
-    if(health.videoModelRevision!=='mini-fast-v1')
-      throw new Error('端口 3701 正在运行旧版视频模型服务，无法保证选用 Seedance 2.0 Mini。'+
-        '请先关闭旧的 TapNow API 进程，再运行当前项目的 start.bat。');
-    if(health.videoStartRevision!=='reply-prefix-v1')
-      throw new Error('端口 3701 的旧版豆包 API 无法识别 Seedance 真正开工的回复。'+
-        '请先关闭旧版 TapNow API，再重新运行 start.bat。');
-    if(health.videoDownloadRevision!=='completed-card-v1')
-      throw new Error('端口 3701 仍在运行不支持豆包成品视频卡片回传的旧版 API。'+
-        '请先关闭旧版 TapNow API，再重新运行 start.bat。');
-    if(health.museBridgeRevision!=='quota-auto-v6-image-resolution')
-      throw new Error('端口 3701 的 TapNow API 尚未接入 Muse 独立浏览器。'+
-        '请先关闭旧服务，再运行当前项目的 start.bat。');
-    if(health.museMediaRevision!=='fresh-chat-media-v2')
-      throw new Error('端口 3701 仍在运行旧版 Muse 图片回传服务。'+
-        '请先结束旧版 TapNow API 进程，再运行 start.bat。');
-    if(health.referenceSelectionRevision!=='at-order-v2')
-      throw new Error('端口 3701 仍在运行旧版图片引用逻辑，可能上传未 @ 的图片。'+
-        '请先关闭旧服务再运行当前项目的 start.bat。');
-    if(!health.workspaceId)
-      console.warn('[TapNow] 已检测到旧版 API，无法识别其项目目录；'+
-        '本次将复用。若数据不一致，请关闭旧版 API 后重新启动。');
-    console.log('[TapNow] API 已在运行，复用端口 3701（不再重复启动）。');
-  }else{
-    console.log('[TapNow] 启动 API：'+apiUrl);
-    const child=startChild('API',['server/index.mjs']);
-    await waitReady(apiHealth,'API',child);
-    console.log('[TapNow] API 已就绪');
-  }
-  const webOccupied=await portListening(webPort);
-  if(webOccupied){
-    if(!await validWeb())throw new Error(
-      '端口 5173 已被其他网页程序占用。请先关闭该程序后重试。'
-    );
-    console.log('[TapNow] 画布已在运行，复用端口 5173。');
-  }else{
-    console.log('[TapNow] 启动画布：'+webUrl);
-    const child=startChild('WEB',[
-      'node_modules/vite/bin/vite.js','--host','127.0.0.1',
-      '--port',String(webPort),'--strictPort'
-    ]);
-    await waitReady(validWeb,'WEB',child);
-    console.log('[TapNow] 画布已就绪：'+webUrl);
-  }
-  if(children.size===0)
-    console.log('[TapNow] 两项服务已运行，无需创建重复进程。');
-  else
-    console.log('[TapNow] 服务运行中。关闭此窗口仅停止本次启动的进程。');
+  // A service can appear after the pre-update cleanup. Never reuse an
+  // outdated API or Vite instance after GitHub updated the source.
+  await releasePorts();
+  console.log('[TapNow] 启动 API：'+apiUrl);
+  const api=startChild('API',['server/index.mjs']);
+  await waitReady(apiHealth,'API',api);
+  console.log('[TapNow] API 已就绪');
+  console.log('[TapNow] 启动画布：'+webUrl);
+  const web=startChild('WEB',[
+    'node_modules/vite/bin/vite.js','--host','127.0.0.1',
+    '--port',String(webPort),'--strictPort'
+  ]);
+  await waitReady(validWeb,'WEB',web);
+  console.log('[TapNow] 画布已就绪：'+webUrl);
+  console.log('[TapNow] 两项服务均使用最新源码启动。关闭本窗口可停止本次进程。');
 }
 
 main().catch(async error=>{

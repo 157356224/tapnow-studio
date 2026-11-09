@@ -16,8 +16,46 @@ function git(root,args,{timeout=90000}={}){
   };
 }
 
-// Git downloads only new objects. Fast-forward merge updates only files whose
-// contents changed, leaving untouched files (and all ignored local data) alone.
+function preserveUntrackedCollisions({root,latest,runGit,log}){
+  const remoteFiles=runGit(root,['ls-tree','-r','--name-only','-z',latest]);
+  const untracked=runGit(root,['ls-files','--others','--exclude-standard','-z']);
+  if(!remoteFiles.ok||!untracked.ok)
+    throw new Error('检查未跟踪文件更新冲突失败');
+  const targetFiles=new Set(remoteFiles.output.split('\0').filter(Boolean));
+  const privateFiles=untracked.output.split('\0').filter(Boolean);
+  const conflictPaths=[];
+  for(const file of privateFiles){
+    const conflict=[...targetFiles].find(target=>
+      target===file||target.startsWith(file+'/')||file.startsWith(target+'/'));
+    if(!conflict)continue;
+    const source=targetFiles.has(conflict)&&file.startsWith(conflict+'/')
+      ?conflict:file;
+    if(!conflictPaths.some(existing=>
+      source===existing||source.startsWith(existing+'/')))
+      conflictPaths.push(source);
+  }
+  if(!conflictPaths.length)return null;
+  const stamp=new Date().toISOString().replace(/[^\d]/g,'')+'-'+
+    crypto.randomBytes(4).toString('hex');
+  const backup=path.join(root,'server','data','tapnow-update-backups',stamp);
+  for(const relative of conflictPaths){
+    const source=path.resolve(root,relative);
+    if(!source.startsWith(path.resolve(root)+path.sep)||
+       relative.startsWith('server/data/'))
+      throw new Error('更新冲突涉及受保护的本地路径：'+relative);
+    if(!fs.existsSync(source))continue;
+    const target=path.resolve(backup,relative);
+    fs.mkdirSync(path.dirname(target),{recursive:true});
+    fs.renameSync(source,target);
+    log('[TapNow Update] 已保留与新版文件同名的本地文件：'+relative);
+  }
+  log('[TapNow Update] 本地同名文件备份目录：'+backup);
+  return backup;
+}
+
+// Pull the actual remote branch even when local tracked files have edits.
+// User edits live in Git stash, and non-fast-forward commits get a backup
+// branch before resetting the *tracked source* to the GitHub revision.
 export function syncGit({root,runGit=git,log=console.log}){
   if(process.env.TAPNOW_SKIP_UPDATE==='1'){
     log('[TapNow Update] 已按 TAPNOW_SKIP_UPDATE=1 跳过联网检查');
@@ -28,41 +66,78 @@ export function syncGit({root,runGit=git,log=console.log}){
   const branch=runGit(root,['symbolic-ref','--quiet','--short','HEAD']);
   const remote=runGit(root,['remote','get-url','origin']);
   if(!branch.ok||!remote.ok)return {updated:false,skipped:'no-upstream'};
-  const dirty=runGit(root,['status','--porcelain','--untracked-files=no']);
-  if(!dirty.ok)return {updated:false,skipped:'status-error'};
-  if(dirty.output){
-    log('[TapNow Update] 本地存在已跟踪文件的修改，跳过自动更新以保护本地改动');
-    return {updated:false,skipped:'local-changes'};
-  }
   log('[TapNow Update] 正在检查 origin/'+branch.output+' ...');
-  const fetched=runGit(root,['fetch','--quiet','--no-tags','origin',branch.output],{timeout:120000});
+  const ref='refs/remotes/origin/'+branch.output;
+  // Explicit refspec updates the remote-tracking branch instead of relying
+  // on an old FETCH_HEAD or stale origin/main from a previous launch.
+  const fetchArgs=['fetch','--no-tags','--prune','origin',
+    '+refs/heads/'+branch.output+':'+ref];
+  let fetched=runGit(root,fetchArgs,{timeout:120000});
   if(!fetched.ok){
-    log('[TapNow Update] GitHub 暂时不可达或尚未授权，继续使用本地版本：'+
+    log('[TapNow Update] 首次 GitHub 请求失败，重试一次：'+
+      (fetched.error||'fetch failed').slice(0,180));
+    fetched=runGit(root,fetchArgs,{timeout:120000});
+  }
+  if(!fetched.ok){
+    log('[TapNow Update] GitHub 检查失败，并非已经是最新版；继续使用本地版本：'+
       (fetched.error||'fetch failed').slice(0,180));
     return {updated:false,skipped:'fetch-failed'};
   }
   const old=runGit(root,['rev-parse','HEAD']);
-  const latest=runGit(root,['rev-parse','FETCH_HEAD']);
+  const latest=runGit(root,['rev-parse',ref]);
   if(!old.ok||!latest.ok)return {updated:false,skipped:'revision-error'};
-  if(old.output===latest.output){
-    log('[TapNow Update] 已是最新版本，没有改动任何源码文件');
+  const dirty=runGit(root,['status','--porcelain','--untracked-files=no']);
+  if(!dirty.ok)throw new Error('读取本地工作区状态失败：'+dirty.error);
+  log('[TapNow Update] 本地 '+old.output.slice(0,12)+
+    ' / GitHub '+latest.output.slice(0,12));
+  if(old.output===latest.output&&!dirty.output){
+    log('[TapNow Update] GitHub 已确认相同提交，无须更新源码');
     return {updated:false,skipped:'current'};
   }
-  if(!runGit(root,['merge-base','--is-ancestor',old.output,latest.output]).ok){
-    log('[TapNow Update] 本地与远程历史存在分叉，未覆盖本地提交');
-    return {updated:false,skipped:'diverged'};
+  let backupStash=null;
+  if(dirty.output){
+    const stamp=new Date().toISOString().replace(/[^\d]/g,'');
+    const saved=runGit(root,['stash','push','-m',
+      'TapNow auto-update '+stamp+' before '+old.output.slice(0,12)]);
+    if(!saved.ok)throw new Error('自动备份本地已跟踪文件失败：'+saved.error);
+    const check=runGit(root,['status','--porcelain','--untracked-files=no']);
+    if(!check.ok||check.output)
+      throw new Error('本地改动未成功备份；GitHub 更新已停止');
+    const stash=runGit(root,['rev-parse','refs/stash']);
+    backupStash=stash.ok?stash.output:null;
+    log('[TapNow Update] 本地改动已保存到 Git stash'+
+      (backupStash?' '+backupStash.slice(0,12):'')+'（可用 git stash list 查看）');
   }
   const names=runGit(root,['diff','--name-only',old.output,latest.output]);
   const files=names.ok?names.output.split(/\r?\n/).filter(Boolean):[];
-  const merged=runGit(root,['merge','--ff-only',latest.output]);
-  if(!merged.ok){
-    log('[TapNow Update] 合并未成功，保持现有文件：'+
-      (merged.error||'merge failed').slice(0,180));
-    return {updated:false,skipped:'merge-failed'};
+  const backupUntracked=old.output!==latest.output
+    ?preserveUntrackedCollisions({root,latest:latest.output,runGit,log}):null;
+  let backupBranch=null;
+  if(old.output!==latest.output){
+    const ff=runGit(root,['merge-base','--is-ancestor',old.output,latest.output]);
+    if(ff.ok){
+      const merged=runGit(root,['merge','--ff-only',latest.output]);
+      if(!merged.ok)
+        throw new Error('GitHub 快进更新失败：'+merged.error+
+          '；本地备份保存在 Git stash 中');
+    }else{
+      backupBranch='tapnow-backup/'+new Date().toISOString()
+        .replace(/[^\d]/g,'')+'-'+crypto.randomBytes(3).toString('hex');
+      const saved=runGit(root,['branch',backupBranch,old.output]);
+      if(!saved.ok)throw new Error('保存旧提交备份分支失败：'+saved.error);
+      const reset=runGit(root,['reset','--hard',latest.output]);
+      if(!reset.ok)throw new Error('切换到 GitHub 版本失败：'+reset.error);
+      log('[TapNow Update] 已备份本地分叉提交到 '+backupBranch);
+    }
   }
-  log('[TapNow Update] 已更新 '+files.length+' 个发生变化的文件'+
+  const confirmed=runGit(root,['rev-parse','HEAD']);
+  if(!confirmed.ok||confirmed.output!==latest.output)
+    throw new Error('更新后版本验证失败，本地 HEAD 未匹配 GitHub');
+  log('[TapNow Update] 已同步 GitHub '+latest.output.slice(0,12)+
+    '，变更 '+files.length+' 个文件'+
     (files.length?'：'+files.slice(0,12).join('、'):''));
-  return {updated:true,oldHead:old.output,newHead:latest.output,files};
+  return {updated:true,oldHead:old.output,newHead:latest.output,files,
+    backupStash,backupBranch,backupUntracked};
 }
 
 export function dependencyFingerprint(root){

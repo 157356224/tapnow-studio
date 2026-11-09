@@ -77,7 +77,7 @@ Cookie 保存在 server/data/doubao-secrets 下的 DPAPI 密文，账号浏览�
 
 双击 start.bat。首次运行会安装 npm 依赖。**需要本机已安装 Microsoft Edge**，项目不再附带便携 Chrome，也无需另行安装 Playwright Chromium。
 
-**V9 启动稳定性修复：** 启动脚本会先检查 3701 API / 5173 画布端口；已有本项目服务时直接复用，不再使用 concurrently -k 重复启动导致整个进程组被终止。若端口被其他程序占用，则输出明确错误。Vite 文件监听排除 server/data（包含 Edge 的 Default/Sessions）、server/uploads、work、dist，避免 Windows 文件锁报 EBUSY。重复双击启动不会结束已运行的服务。
+**自动重启：** 启动前用 Windows netstat 确认占用 3701（API）、3702（共享）或 5173（画布）的 TCP 监听进程 PID，并通过 taskkill /T /F 结束这些旧服务，再更新代码、依赖并启动全新进程。重复双击 start.bat 会重启旧服务，而不是复用旧版本。Vite 文件监听排除 server/data（包含 Edge 的 Default/Sessions）、server/uploads、work、dist，避免 Windows 文件锁报 EBUSY。
 
 所有账号统一使用本机 Microsoft Edge。Edge 资料目录为 server/data/doubao-profiles/<账号ID>-edge；早期账号的旧 Chrome 资料目录 server/data/doubao-profiles/<账号ID> 会保留，避免丢失用户数据，但不再用来启动浏览器。
 
@@ -155,14 +155,14 @@ Muse 支持纯文字以及连接图片节点后按 @ 引用进行参考生图/�
 Windows 首次使用需要安装 Node.js 22.12+（推荐 24 LTS）、Git 和 Microsoft Edge。
 从公开 GitHub 仓库克隆项目后，直接双击 `start.bat`：
 
-1. 启动前运行 `scripts/bootstrap.mjs`，使用 Git 检查 `origin` 当前分支是否有新提交。只快进同步远程发生变化的源码文件，未变化的文件不重新检出。
+1. 先关闭占用 3701/3702/5173 的旧服务，再运行 `scripts/bootstrap.mjs`；每次联网读取 GitHub 远程分支的实际提交 ID，并与本地 HEAD 比对。正常快进只更新发生变化的源码文件。
 2. 对比 `package-lock.json` 的 SHA-256 和当前机器的 Node 主版本；首次启动或依赖变化时自动运行 `npm ci` 下载依赖，其余启动复用现有 `node_modules`。
-3. 更新失败、离线或本地存在未提交的已跟踪改动时，不覆盖用户本地源码；依赖安装失败会恢复旧依赖并尝试回滚更新。
-4. 本地 `server/data/`（Muse/豆包浏览器资料、账号、登录状态、项目）与 `server/uploads/`（生成媒体）始终在 `.gitignore` 中，不上传、不被 Git 更新覆盖。
+3. 本地已跟踪文件存在修改时先保存到 Git stash，再更新到 GitHub 版本；本地提交与远程分叉时先建立 `tapnow-backup/*` 备份分支，再切换到远程版本。可用 `git stash list` 和 `git branch --list 'tapnow-backup/*'` 查看备份。与新版本文件重名的未跟踪文件备份在 `server/data/tapnow-update-backups/`。
+4. GitHub 检查失败会明确打印网络/鉴权错误，不会误报「已是最新版」。依赖安装失败会恢复旧依赖并尝试回滚源码。本地 `server/data/`（浏览器资料、账号、登录状态、项目）与 `server/uploads/`（生成媒体）始终在 `.gitignore` 中，不上传、不被 Git 更新覆盖。
 
 可运行 `npm run update` 单独检查更新与依赖，或在启动前设置 `TAPNOW_SKIP_UPDATE=1` 仅跳过 Git 网络更新。公开仓库无需登录即可克隆及检查更新；只有仓库维护者上传新版本需要 GitHub 授权。不要把 PAT 写入源码、远程 URL 或 Git 配置。
 
-检查更新行为可运行 `npm run test:updater`，该测试使用操作系统临时目录中的本地 Git 仓库，不修改真实仓库或账号资料。
+检查更新行为可运行 `npm run test:updater`；检查 Windows 端口自动清理可运行 `npm run test:ports`。两项测试均使用独立临时 Git 仓库/临时监听端口，不修改真实画布或账号资料。
 
 ## 验证
 
