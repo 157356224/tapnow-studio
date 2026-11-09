@@ -30,6 +30,7 @@
     "test:share-sync": "node scripts/share-sync-test.mjs",
     "test:share-server": "node scripts/share-server-test.mjs",
     "test:share-ui": "node scripts/ui-share-test.mjs",
+    "test:guest-local": "node scripts/guest-local-bridge-test.mjs",
     "test:share-media": "node scripts/share-media-test.mjs",
     "test:share-lan": "node scripts/share-live-network-check.mjs",
     "test:layout-perf": "node scripts/ui-layout-performance-test.mjs",

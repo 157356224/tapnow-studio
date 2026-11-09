@@ -3,6 +3,7 @@ import express from 'express';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {mountShareRoutes} from '../server/share.mjs';
+import {diffCanvas,snapshotCanvas} from '../src/share-sync.mjs';
 
 const project={
   id:'host-media-test',title:'素材回传测试',
@@ -101,11 +102,11 @@ try{
     });
     return {status:response.status,data:await response.json()};
   };
-  const names=await fetch(guest+'/api/chatgpt/accounts',{
+  const accountResponse=await fetch(guest+'/api/chatgpt/accounts',{
     headers:{cookie}
-  }).then(response=>response.json());
-  assert.equal(names[0].name,'模型账号');
-  assert.equal(names[0].accessToken,undefined);
+  });
+  assert.equal(accountResponse.status,403,
+    'Guests must never read host model account names or credentials');
   assert.equal((await send('/api/doubao/accounts',{role:'admin'})).status,403);
   assert.equal((await send('/api/doubao/jobs',{
     projectId:'unshared',nodeId:'vid'
@@ -116,9 +117,23 @@ try{
   const video=await send('/api/doubao/jobs',{
     projectId:project.id,nodeId:'vid',prompt:'协作者请求视频'
   });
-  assert.equal(image.status,202);
-  assert.equal(video.status,202);
-  assert.equal(jobs.length,2);
+  assert.equal(image.status,403);
+  assert.equal(video.status,403);
+  assert.equal(jobs.length,0,'User2 must never submit work to User1 API');
+  // The guest's own local API would upload these generated files to the host.
+  // Simulate the host's resulting canvas patch, then verify the guest receives
+  // both files and the live SSE state without gaining account access.
+  const before=snapshotCanvas(read()[0]);
+  const completed=structuredClone(before);
+  completed.nodes[0].data.mediaUrl='/api/uploads/guest-output.jpg';
+  completed.nodes[0].data.status='done';
+  completed.nodes[1].data.mediaUrl='/api/uploads/guest-output.mp4';
+  completed.nodes[1].data.status='done';
+  const patched=await fetch(host+'/api/share/patch',{
+    method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({clientId:'host',patch:diffCanvas(before,completed)})
+  });
+  assert.equal(patched.status,200);
   assert.equal(read()[0].nodes[0].data.mediaUrl,'/api/uploads/guest-output.jpg');
   assert.equal(read()[0].nodes[1].data.mediaUrl,'/api/uploads/guest-output.mp4');
   for(const [file,expected] of [
@@ -147,7 +162,7 @@ try{
     event.project?.nodes?.some(node=>node.data.mediaUrl?.endsWith('.mp4'))),
     'both completed media assets must arrive through the live event stream');
   streamController.abort();
-  console.log('PASS: guest image/video jobs on host, host media storage, secure download, live media SSE update');
+  console.log('PASS: host generation endpoints denied, shared media downloads and live SSE updates');
 }finally{
   await shared.stop().catch(()=>{});
   await new Promise(resolve=>hostServer.close(resolve));

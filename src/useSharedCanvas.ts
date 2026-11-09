@@ -4,6 +4,7 @@ import {
 } from './share-sync.mjs';
 import type {CanvasGroup,Project,StudioEdge,StudioNode} from './types';
 import {uuid} from './uuid';
+import {guestRoute} from './remoteGuest';
 
 export type ShareRole='loading'|'none'|'join'|'host'|'guest';
 export type ShareInfo={
@@ -34,7 +35,7 @@ function clientId(){
   return stored;
 }
 async function api<T>(url:string,init?:RequestInit):Promise<T>{
-  const response=await fetch(url,init);
+  const response=await fetch(guestRoute(url),init);
   const data=await response.json().catch(()=>({}));
   if(!response.ok)throw new Error(data.error||'协作连接失败');
   return data as T;
@@ -144,7 +145,8 @@ export function useSharedCanvas(args:{
 
   useEffect(()=>{
     if(!active||!ready||projectId!==share.projectId)return;
-    const events=new EventSource('/api/share/events?clientId='+encodeURIComponent(ownId.current));
+    const events=new EventSource(guestRoute('/api/share/events?clientId='+
+      encodeURIComponent(ownId.current)));
     source.current=events;
     events.onmessage=e=>{
       try{applyRemote(JSON.parse(e.data) as ShareEvent);}catch{}

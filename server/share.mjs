@@ -187,7 +187,7 @@ export function mountShareRoutes(app,{
     const heartbeat=setInterval(()=>{
       if(!res.writableEnded)res.write(': heartbeat\n\n');
     },10000);
-    req.on('close',()=>{
+    res.on('close',()=>{
       clearInterval(heartbeat);
       if(active){
         active.listeners.delete(res);
@@ -245,7 +245,7 @@ export function mountShareRoutes(app,{
       revision:1,last:snapshotCanvas(read().find(p=>p.id===projectId)),
       guests:new Map(),listeners:new Set(),locks:new Map(),
       connections:new Map(),nextGuest:2,
-      allowedJobs:new Set()
+      // Only collaborative document state is shared. Generation stays local.
     };
     try{
       lanServer=await new Promise((resolve,reject)=>{
@@ -349,56 +349,20 @@ export function mountShareRoutes(app,{
   lanApp.all('/api/projects/:id',requireGuest,(_req,res)=>
     fail(res,409,'共享画布需通过实时同步接口保存'));
 
-  // Only allow the collaboration APIs and generation/media calls. Account
-  // management, cookies, passwords, independent browser controls and ALL
-  // other loopback endpoints remain unavailable over the LAN.
+  // Guest rendering and asset uploads use the host's storage, but generation
+  // NEVER uses the host's accounts, browsers or paid API keys.
+  // A guest must start their own local TapNow API and join via its bridge.
   const canProxy=req=>{
     const url=new URL(req.originalUrl,'http://localhost');
     const p=url.pathname,m=req.method;
     if(m==='GET'&&/^\/api\/uploads\/[a-z0-9._-]+$/i.test(p))return true;
     if(m==='POST'&&p==='/api/assets')return true;
-    if(m==='GET'&&p==='/api/health')return true;
-    if(m==='GET'&&p==='/api/h3/config')return true;
-    if(m==='POST'&&p==='/api/workflow/plan')return true;
     if(m==='POST'&&/^\/api\/videos\/extract-(?:frame|last-frame)$/.test(p))return true;
-    if(m==='GET'&&/^\/api\/(?:doubao|muse|chatgpt)\/accounts$/.test(p))return true;
-    if(m==='GET'&&p==='/api/muse/quotas')return true;
-    if(m==='POST'&&/^\/api\/(?:doubao|muse|h3|chatgpt)\/jobs$/.test(p))return true;
-    if(m==='GET'&&/^\/api\/(?:doubao|muse|h3|chatgpt)\/jobs\/[a-z0-9-]+$/.test(p))
-      return active.allowedJobs.has(p.split('/').at(-1));
     return false;
   };
   function proxy(req,res){
-    if(!canProxy(req))return fail(res,403,'此接口不对协作者开放');
-    const pathname=new URL(req.originalUrl,'http://localhost').pathname;
-    if(req.method==='POST'&&/\/jobs$/.test(pathname)){
-      // Stream the request only for the project that was explicitly shared.
-      // Guest requests cannot launch jobs on any other host project.
-      return gate(req,res,()=>{
-        if(req.body?.projectId!==active.projectId||
-           !findProject()?.nodes.some(node=>node.id===req.body?.nodeId))
-          return fail(res,403,'只能在当前共享画布生成');
-        forward(req,res,Buffer.from(JSON.stringify(req.body)));
-      });
-    }
-    if(req.method==='GET'&&/\/accounts$/.test(pathname)){
-      // Never return any cookie values or account credentials.
-      return fetch('http://127.0.0.1:'+upstreamPort+req.originalUrl)
-        .then(async response=>{
-          const items=await response.json();
-          if(!response.ok)return res.status(response.status).json({error:items.error});
-          res.json((Array.isArray(items)?items:[]).map(item=>({
-            id:item.id,name:item.name,nativeBrowserOpen:!!item.nativeBrowserOpen,
-            hasCookie:!!item.hasCookie
-          })));
-        }).catch(error=>fail(res,502,error.message));
-    }
-    if(req.method==='GET'&&pathname==='/api/h3/config')
-      return fetch('http://127.0.0.1:'+upstreamPort+req.originalUrl)
-        .then(async response=>{
-          const config=await response.json();
-          res.status(response.status).json({configured:!!config.configured});
-        }).catch(error=>fail(res,502,error.message));
+    if(!canProxy(req))return fail(res,403,
+      '协作者生成必须使用自己的 TapNow 本地 API；主机账号接口已关闭');
     forward(req,res);
   }
   function forward(req,res,body){
@@ -414,26 +378,8 @@ export function mountShareRoutes(app,{
       host:'127.0.0.1',port:upstreamPort,
       path:req.originalUrl,method:req.method,headers
     },response=>{
-      const isJob=req.method==='POST'&&/\/jobs$/.test(
-        new URL(req.originalUrl,'http://localhost').pathname);
-      if(!isJob){
-        res.writeHead(response.statusCode||502,response.headers);
-        response.pipe(res);return;
-      }
-      const chunks=[];
-      response.on('data',chunk=>chunks.push(chunk));
-      response.on('end',()=>{
-        const buffer=Buffer.concat(chunks);
-        if((response.statusCode||500)<300){
-          try{
-            const job=JSON.parse(buffer.toString('utf8'));
-            if(typeof job.id==='string')active?.allowedJobs.add(job.id);
-          }catch{}
-        }
-        res.status(response.statusCode||502);
-        res.setHeader('Content-Type','application/json');
-        res.end(buffer);
-      });
+      res.writeHead(response.statusCode||502,response.headers);
+      response.pipe(res);
     });
     upstream.on('error',error=>{
       if(!res.headersSent)fail(res,502,'主机 API 暂时不可用：'+error.message);

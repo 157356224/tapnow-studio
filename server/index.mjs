@@ -12,6 +12,7 @@ import {extractVideoLastFrame,extractVideoFrameAt} from './video-last-frame.mjs'
 import {mountH3Routes} from './yuanbo-h3.mjs';
 import {mountChatGPTRoutes,preserveChatGPTCompletedMedia} from './chatgpt.mjs';
 import {mountShareRoutes} from './share.mjs';
+import {mountGuestLocalBridge} from './guest-local-bridge.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 // Snapshot the loaded share implementation at process start. A later Git
@@ -84,8 +85,11 @@ app.get('/api/health', (_req, res) => res.json({
       path.resolve(root,'..')
   ).digest('hex').slice(0,16)
 }));
+mountGuestLocalBridge(app,{read,write,uploadDir});
 app.get('/api/projects', (_req, res) => {
-  res.json(read().map(({ id, title, updatedAt }) => ({ id, title, updatedAt })).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
+  res.json(read().filter(project=>!project.hiddenGuestJob)
+    .map(({ id, title, updatedAt }) => ({ id, title, updatedAt }))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
 });
 app.post('/api/projects', (req, res) => {
   const project = {

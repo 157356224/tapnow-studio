@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
 import express from 'express';
 import fs from 'node:fs';
+import os from 'node:os';
+import crypto from 'node:crypto';
+import multer from 'multer';
 import {chromium} from 'playwright';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {mountShareRoutes} from '../server/share.mjs';
+import {mountGuestLocalBridge} from '../server/guest-local-bridge.mjs';
+import {diffCanvas,snapshotCanvas} from '../src/share-sync.mjs';
 
 const node=(id,name,x,y)=>({
   id,type:'studio',position:{x,y},
@@ -20,8 +25,23 @@ let projects=[{
 const read=()=>structuredClone(projects);
 const write=value=>{projects=structuredClone(value);};
 const root=path.join(path.dirname(fileURLToPath(import.meta.url)),'..','server');
+const scratch=fs.mkdtempSync(path.join(os.tmpdir(),'tapnow-guest-ui-'));
+const hostUploads=path.join(scratch,'host');
+const localUploads=path.join(scratch,'guest');
+fs.mkdirSync(hostUploads,{recursive:true});
+fs.mkdirSync(localUploads,{recursive:true});
+fs.writeFileSync(path.join(localUploads,'guest-produced.png'),Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==','base64'));
+fs.writeFileSync(path.join(localUploads,'guest-produced.mp4'),
+  Buffer.from('Simulated local video output'));
 const app=express();
 app.use(express.json({limit:'15mb'}));
+app.post('/api/assets',multer({dest:hostUploads}).single('file'),(req,res)=>{
+  const file=crypto.randomUUID()+path.extname(req.file.originalname);
+  fs.renameSync(req.file.path,path.join(hostUploads,file));
+  res.status(201).json({url:'/api/uploads/'+file,name:req.file.originalname});
+});
+app.use('/api/uploads',express.static(hostUploads));
 app.get('/api/projects',(_req,res)=>res.json(projects.map(p=>({
   id:p.id,title:p.title,updatedAt:p.updatedAt
 }))));
@@ -44,17 +64,89 @@ app.get('/api/muse/quotas',(_req,res)=>res.json({
   totalCapacity:0,measuredCapacity:0,totalUsed:0,totalRemaining:0
 }));
 app.get('/api/health',(_req,res)=>res.json({ok:true}));
+const server=await new Promise(resolve=>{
+  const instance=app.listen(0,'127.0.0.1',()=>resolve(instance));
+});
 const shared=mountShareRoutes(app,{
-  read,write,root,uploadDir:path.join(root,'uploads'),lanPort:0
+  read,write,root,uploadDir:hostUploads,lanPort:0,
+  upstreamPort:server.address().port
 });
 const dist=path.join(root,'..','dist');
 const indexFile=path.join(dist,'index.html');
 let originalIndex=null;
 app.use(express.static(dist,{index:false}));
 app.get('/{*path}',(_req,res)=>res.sendFile(path.join(dist,'index.html')));
-const server=await new Promise(resolve=>{
-  const instance=app.listen(0,'127.0.0.1',()=>resolve(instance));
+// User2 has an independent local TapNow page/API; only share state comes
+// from the host. It must NOT send generation calls to the host service.
+const localApp=express();
+localApp.use(express.json({limit:'15mb'}));
+const localServer=await new Promise(resolve=>{
+  const instance=localApp.listen(0,'127.0.0.1',()=>resolve(instance));
 });
+const localOrigin='http://127.0.0.1:'+localServer.address().port;
+let localProjects=[{
+  id:'guest-personal',title:'用户2本机画布',
+  nodes:[],edges:[],groups:[],groupColorCursor:0,
+  viewport:{x:0,y:0,zoom:1},createdAt:new Date().toISOString(),
+  updatedAt:new Date().toISOString()
+}];
+mountGuestLocalBridge(localApp,{
+  read:()=>structuredClone(localProjects),
+  write:value=>{localProjects=structuredClone(value);},
+  uploadDir:localUploads,extraLoopbackOrigins:[localOrigin]
+});
+localApp.get('/api/share/info',(_req,res)=>res.json({role:'none'}));
+localApp.get('/api/projects',(_req,res)=>res.json(localProjects.map(p=>({
+  id:p.id,title:p.title,updatedAt:p.updatedAt
+}))));
+localApp.get('/api/projects/:id',(req,res)=>{
+  const p=localProjects.find(item=>item.id===req.params.id);
+  if(!p)return res.status(404).json({error:'Not found'});
+  res.json(p);
+});
+localApp.get('/api/chatgpt/accounts',(_req,res)=>res.json([]));
+localApp.get('/api/doubao/accounts',(_req,res)=>res.json([
+  {id:'user2-doubao',name:'用户2的豆包',nativeBrowserOpen:false}
+]));
+localApp.get('/api/muse/accounts',(_req,res)=>res.json([
+  {id:'user2-account',name:'用户2的Muse',nativeBrowserOpen:false}
+]));
+localApp.get('/api/health',(_req,res)=>res.json({
+  museBridgeRevision:'quota-auto-v6-image-resolution',
+  museMediaRevision:'fresh-chat-media-v2',audioReferenceRevision:'mixed-media-v1',
+  multiImageUploadRevision:'v3-prompt-first',
+  videoModelRevision:'mini-fast-v1',videoStartRevision:'reply-prefix-v1',
+  videoDownloadRevision:'completed-card-v1',referenceSelectionRevision:'at-order-v2',
+  audioMp4Revision:'mp3-to-mp4-v1'
+}));
+let localMuseJobs=0;
+let localDoubaoJobs=0;
+localApp.post('/api/muse/jobs',(req,res)=>{
+  assert.equal(req.body.accountId,'user2-account');
+  assert.ok(localProjects.some(p=>p.id===req.body.projectId&&p.hiddenGuestJob));
+  localMuseJobs++;
+  res.status(201).json({id:'user2-job',status:'queued',message:'本机任务'});
+});
+localApp.get('/api/muse/jobs/user2-job',(_req,res)=>res.json({
+  id:'user2-job',status:'completed',progress:100,
+  mediaUrl:'/api/uploads/guest-produced.png',message:'本机生成完成'
+}));
+localApp.post('/api/doubao/jobs',(req,res)=>{
+  assert.equal(req.body.accountId,'user2-doubao');
+  assert.ok(localProjects.some(p=>p.id===req.body.projectId&&p.hiddenGuestJob));
+  localDoubaoJobs++;
+  res.status(201).json({id:'user2-video',status:'queued',message:'本机视频任务'});
+});
+localApp.get('/api/doubao/jobs/user2-video',(_req,res)=>res.json({
+  id:'user2-video',status:'completed',progress:100,
+  videoUrl:'/api/uploads/guest-produced.mp4',message:'本机视频完成'
+}));
+localApp.get('/api/muse/quotas',(_req,res)=>res.json({
+  rows:[],totalAccounts:0,knownAccounts:0,unknownAccounts:0,
+  totalCapacity:0,measuredCapacity:0,totalUsed:0,totalRemaining:0
+}));
+localApp.use(express.static(dist,{index:false}));
+localApp.get('/{*path}',(_req,res)=>res.sendFile(path.join(dist,'index.html')));
 let browser;
 try{
   browser=await chromium.launch({channel:'msedge',headless:true});
@@ -68,7 +160,18 @@ try{
   await host.goto('http://127.0.0.1:'+server.address().port+'/',{
     waitUntil:'domcontentloaded'
   });
-  await host.locator('.react-flow__node[data-id="a"]').waitFor();
+  try{
+    await host.locator('.react-flow__node[data-id="a"]').waitFor();
+  }catch(error){
+    const state=await host.evaluate(()=>({
+      text:document.body.innerText.slice(0,650),
+      resources:[...document.scripts].map(script=>script.src),
+      hash:location.hash
+    }));
+    throw new Error('Host canvas failed to load: '+JSON.stringify({
+      state,errors,cause:error.message
+    }));
+  }
   // Simulate a previous Git revision's compiled page still in dist/.
   // Starting a share must replace it even though index.html already exists.
   originalIndex=fs.readFileSync(indexFile,'utf8');
@@ -84,7 +187,7 @@ try{
   originalIndex=null;
   const code=(await host.getByTestId('share-code').innerText()).trim();
   assert.match(code,/^\d{5}$/);
-  await guestEntry.goto('http://127.0.0.1:'+server.address().port+'/',{
+  await guestEntry.goto(localOrigin+'/',{
     waitUntil:'domcontentloaded'
   });
   await guestEntry.getByRole('button',{name:'加入别人的画布'}).click();
@@ -98,8 +201,9 @@ try{
   guest.on('pageerror',error=>errors.push(error.message));
   guest.setDefaultTimeout(15000);
   await guest.locator('.react-flow__node[data-id="a"]').waitFor();
-  assert.equal(new URL(guest.url()).hash,'',
-    'one-time join code must be removed from address bar after joining');
+  assert.match(new URL(guest.url()).hash,/^#remote=[0-9a-f]{48}$/,
+    'guest must remain on own local API with a private bridge session');
+  assert.equal(new URL(guest.url()).origin,localOrigin);
   await host.getByRole('button',{name:'关闭共享设置'}).click();
 
   // Host locks node A by opening its editor, guest sees and cannot drag it.
@@ -165,6 +269,82 @@ try{
   await guest.mouse.click(1550,860);
   await host.locator('.react-flow__node[data-id="b"]')
     .getByTestId('shared-node-locked').waitFor({state:'hidden'});
+  // User2 chooses a local account on a shared image node. Neither the chosen
+  // account ID nor the generation request is allowed to reach User1's API.
+  const beforeImage=snapshotCanvas(read()[0]);
+  const imageCanvas=structuredClone(beforeImage);
+  imageCanvas.nodes.push({
+    id:'guest-image',type:'studio',position:{x:660,y:95},
+    data:{kind:'image',title:'协作者生图',provider:'muse',
+      museAccountId:'host-account-id',prompt:'sunrise',status:'idle'}
+  });
+  const injected=await fetch('http://127.0.0.1:'+server.address().port+
+    '/api/share/patch',{
+    method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({clientId:'host',patch:diffCanvas(beforeImage,imageCanvas)})
+  });
+  assert.equal(injected.status,200);
+  const imageNode=guest.locator('.react-flow__node[data-id="guest-image"]');
+  await imageNode.waitFor();
+  await imageNode.locator('.tn-node-frame').click();
+  // React Flow renders the composer inside a portal, not as a DOM child
+  // of the node; target the visible toolbar in the guest's page.
+  await guest.getByRole('combobox',{name:'Muse 生成账号'})
+    .selectOption('user2-account');
+  assert.equal(read()[0].nodes.find(n=>n.id==='guest-image').data.museAccountId,
+    'host-account-id','User2 account selection must not overwrite User1 data');
+  await guest.locator('button.tn-submit:visible').click();
+  for(let attempt=0;attempt<100&&
+    !read()[0].nodes.find(n=>n.id==='guest-image').data.mediaUrl;attempt++)
+    await new Promise(resolve=>setTimeout(resolve,150));
+  const generated=read()[0].nodes.find(n=>n.id==='guest-image');
+  if(!generated.data.mediaUrl){
+    const guestState=await guest.evaluate(()=>({
+      body:document.body.innerText.slice(-1800),
+      status:[...document.querySelectorAll('.tn-job-caption,.tn-queued,.tn-node-error')]
+        .map(x=>x.textContent?.slice(0,220))
+    }));
+    console.error('GUEST GENERATION DIAGNOSTICS',JSON.stringify({
+      localMuseJobs,localProjects:localProjects.map(p=>({
+        id:p.id,hidden:p.hiddenGuestJob,nodes:p.nodes.length
+      })),
+      sharedNode:generated.data,guestState,errors
+    }));
+  }
+  assert.match(generated.data.mediaUrl||'',/^\/api\/uploads\/[0-9a-f-]+\.png$/);
+  assert.equal(generated.data.museAccountId,'host-account-id');
+  assert.equal(localMuseJobs,1,'User2 must create a job on their own API');
+  // Verify Seedance video follows the same local-only account and media path.
+  const beforeVideo=snapshotCanvas(read()[0]);
+  const videoCanvas=structuredClone(beforeVideo);
+  videoCanvas.nodes.push({
+    id:'guest-video',type:'studio',position:{x:1000,y:95},
+    data:{kind:'video',title:'协作者视频',provider:'doubao',
+      model:'Seedance 2.0 Mini',accountId:'host-doubao-id',
+      prompt:'local video',duration:'5s',status:'idle'}
+  });
+  const videoInjected=await fetch('http://127.0.0.1:'+
+    server.address().port+'/api/share/patch',{
+    method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({clientId:'host',patch:diffCanvas(beforeVideo,videoCanvas)})
+  });
+  assert.equal(videoInjected.status,200);
+  const videoNode=guest.locator('.react-flow__node[data-id="guest-video"]');
+  await videoNode.waitFor();
+  await videoNode.locator('.tn-node-frame').click();
+  await guest.getByRole('combobox',{name:'视频生成账号'})
+    .selectOption('user2-doubao');
+  assert.equal(read()[0].nodes.find(n=>n.id==='guest-video').data.accountId,
+    'host-doubao-id','Guest Doubao choice must not affect host account');
+  await guest.getByRole('button',{name:'使用选定豆包账号生成视频'}).click();
+  for(let attempt=0;attempt<100&&
+    !read()[0].nodes.find(n=>n.id==='guest-video').data.mediaUrl;attempt++)
+    await new Promise(resolve=>setTimeout(resolve,150));
+  const generatedVideo=read()[0].nodes.find(n=>n.id==='guest-video');
+  assert.match(generatedVideo.data.mediaUrl||'',
+    /^\/api\/uploads\/[0-9a-f-]+\.mp4$/,JSON.stringify(generatedVideo.data));
+  assert.equal(generatedVideo.data.accountId,'host-doubao-id');
+  assert.equal(localDoubaoJobs,1,'User2 video must use their local API');
   // LAN HTTP is not a secure context (unlike localhost). Verify the actual
   // network guest can boot without crypto.randomUUID().
   const links=await host.evaluate(async()=>
@@ -189,7 +369,7 @@ try{
     await lanGuest.close();
   }
   assert.deepEqual(errors,[]);
-  console.log('PASS: two browsers join, two-way lock ownership, live drag, both sides add nodes, shared colored frames');
+  console.log('PASS: local guest Muse image + Doubao video generation, own accounts, host media, live sync and locks');
 }finally{
   // Do not leave a deliberately broken HTML file if the assertion fails.
   if(originalIndex&&fs.existsSync(indexFile)&&
@@ -197,5 +377,7 @@ try{
     fs.writeFileSync(indexFile,originalIndex);
   await shared.stop().catch(()=>{});
   await browser?.close();
+  await new Promise(resolve=>localServer.close(resolve));
   await new Promise(resolve=>server.close(resolve));
+  fs.rmSync(scratch,{recursive:true,force:true,maxRetries:4,retryDelay:100});
 }

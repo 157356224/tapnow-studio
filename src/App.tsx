@@ -20,6 +20,7 @@ import {SelectionGroupControls} from './SelectionGroupControls';
 import {CanvasGroupLayer} from './CanvasGroupLayer';
 import {useSharedCanvas} from './useSharedCanvas';
 import {uuid as uid} from './uuid';
+import {guestRoute,guestMediaURL,remoteGuestSession} from './remoteGuest';
 import {planGroupConnections} from './node-alignment.mjs';
 import {snapNodePositionChanges} from './node-smart-guides.mjs';
 import type {SmartGuides} from './node-smart-guides.mjs';
@@ -95,7 +96,7 @@ function exportTextFile(name: string, data: string, mime = 'application/json') {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 async function request<T>(route: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(route, init);
+  const res = await fetch(guestRoute(route), init);
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((body as {error?: string}).error || '服务器返回错误');
   return body as T;
@@ -113,9 +114,10 @@ function Workspace() {
   const [shareStarting,setShareStarting]=useState(false);
   const [joinCode,setJoinCode]=useState('');
   const [joinError,setJoinError]=useState('');
-  const joinFromLocalCanvas=(event:React.FormEvent<HTMLFormElement>)=>{
+  const joinFromLocalCanvas=async(event:React.FormEvent<HTMLFormElement>)=>{
     event.preventDefault();
     setJoinError('');
+    let tab:Window|null=null;
     try{
       const address=hostAddress.trim();
       const url=new URL(/^https?:\/\//i.test(address)?address:'http://'+address);
@@ -130,14 +132,20 @@ function Workspace() {
         throw new Error('请输入主机的局域网 IP 地址，例如 192.168.1.6:3702');
       if(!/^\d{5}$/.test(joinCode))
         throw new Error('请输入主机提供的 5 位加入码');
-      // The fragment is never sent to the host over HTTP. The guest page
-      // consumes it once and exchanges it for its own HttpOnly session.
+      // Join through user2's own loopback API, keeping all generation
+      // requests, account configuration and browser profiles on this device.
       url.port=url.port||'3702';
       url.pathname='/';url.search='';
-      url.hash='join='+joinCode;
-      window.open(url.toString(),'_blank','noopener,noreferrer');
+      tab=window.open('about:blank','_blank');
+      if(tab)tab.opener=null;
+      const joined=await request<{sessionId:string}>('/api/remote/connect',
+        JSONBody({address:url.origin,code:joinCode}));
+      const localURL=window.location.origin+'/#remote='+joined.sessionId;
+      if(tab)tab.location.replace(localURL);
+      else window.location.assign(localURL);
       setJoinPopup(false);
     }catch(error){
+      tab?.close();
       setJoinError(error instanceof Error?error.message:'无法识别主机地址');
     }
   };
@@ -186,6 +194,7 @@ function Workspace() {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const projectSaveTail=useRef<Promise<void>>(Promise.resolve());
   const generatingNodeIds=useRef(new Set<string>());
+  const localGuestMirrors=useRef(new Map<string,Set<string>>());
   const history = useRef<History[]>([]);
   const forward = useRef<History[]>([]);
   const clipboard = useRef<StudioNode[]>([]);
@@ -255,15 +264,31 @@ function Workspace() {
     acquire:acquireShareLock,release:releaseShareLock,
     lockedByOther}=collaboration;
   const initializedOnce=useRef(false);
-  const visibleNodes=useMemo(()=>sharing
-    ?nodes.map(node=>{
+  const remoteGuestId=remoteGuestSession();
+  const isLocalGuest=share.role==='guest'&&!!remoteGuestId;
+  // Account IDs are private to each collaborator's machine, never saved in
+  // the shared node. Host node account IDs are not valid on a guest machine.
+  const [guestAccountChoices,setGuestAccountChoices]=useState<Record<string,{
+    accountId?:string;museAccountId?:string;chatgptAccountId?:string;
+  }>>({});
+  const visibleNodes=useMemo(()=>
+    nodes.map(node=>{
       const label=lockedByOther(node.id);
-      return label
-        ?{...node,draggable:false,selectable:false,
-          data:{...node.data,__collabLockedBy:label}}
-        :node;
-    })
-    :nodes,[sharing,nodes,shareLocks,lockedByOther]);
+      return {
+        ...node,
+        ...(sharing&&label?{draggable:false,selectable:false}:{}),
+        data:{...node.data,
+          ...(isLocalGuest?{
+            accountId:guestAccountChoices[node.id]?.accountId||'',
+            museAccountId:guestAccountChoices[node.id]?.museAccountId||'auto',
+            chatgptAccountId:guestAccountChoices[node.id]?.chatgptAccountId||'auto'
+          }:{}),
+          ...(sharing&&label?{__collabLockedBy:label}:{}),
+          ...(isLocalGuest&&node.data.mediaUrl
+            ?{mediaUrl:guestMediaURL(node.data.mediaUrl)}:{})
+        }
+      };
+    }),[sharing,nodes,shareLocks,lockedByOther,isLocalGuest,guestAccountChoices]);
   useEffect(()=>{
     if(editorState.id&&lockedByOther(editorState.id))
       setEditorState({id:null,instant:true});
@@ -493,8 +518,25 @@ function Workspace() {
     } catch { notify('删除项目失败'); }
   };
   const update = useCallback((id:string, patch:Partial<StudioNodeData>) => {
-    setNodes(prev => prev.map(node => node.id === id ? {...node,data:{...node.data,...patch}}:node));
-  }, [setNodes]);
+    const changes={...patch};
+    if(isLocalGuest){
+      const local:{accountId?:string;museAccountId?:string;chatgptAccountId?:string}={};
+      for(const key of ['accountId','museAccountId','chatgptAccountId'] as const){
+        if(Object.prototype.hasOwnProperty.call(changes,key)){
+          local[key]=changes[key];
+          delete changes[key];
+        }
+      }
+      if(Object.keys(local).length){
+        setGuestAccountChoices(previous=>({
+          ...previous,[id]:{...previous[id],...local}
+        }));
+      }
+    }
+    if(Object.keys(changes).length)
+      setNodes(prev=>prev.map(node=>node.id===id
+        ?{...node,data:{...node.data,...changes}}:node));
+  }, [setNodes,isLocalGuest]);
   const addNode = useCallback((kind:Kind, point?:{x:number;y:number}, patch:Partial<StudioNodeData>={}) => {
     snapshot();
     const pos = point || rf.screenToFlowPosition({x:window.innerWidth * .47,y:window.innerHeight * .46});
@@ -660,7 +702,12 @@ function Workspace() {
       const [asset,dimensions]=await Promise.all([
         request<{url:string;name:string}>('/api/assets',{method:'POST',body:fd}),measure
       ]);
-      update(id,{mediaUrl:asset.url,mediaName:asset.name,demo:false,status:'idle',...dimensions});
+      const published=remoteGuestSession()
+        ?await request<{url:string}>('/api/remote/'+remoteGuestSession()+'/publish',
+          JSONBody({mediaUrl:asset.url}))
+        :asset;
+      update(id,{mediaUrl:published.url,mediaName:asset.name,
+        demo:false,status:'idle',...dimensions});
       notify('已导入素材：'+asset.name);
     } catch(e) {notify('导入失败：'+(e as Error).message);}
   },[update,notify]);
@@ -767,7 +814,9 @@ function Workspace() {
       .map(n=>n.id+':'+n.data.referenceOrder?.join(','))
   ].join('|'),[edges,nodes]);
   const referencesFor=useCallback((id:string)=>
-    referencesForNode(id,nodesRef.current,edgesRef.current),[referenceSignature]);
+    referencesForNode(id,nodesRef.current,edgesRef.current).map(ref=>({
+      ...ref,url:guestMediaURL(ref.url)||ref.url
+    })),[referenceSignature]);
   const reorderReferences=useCallback((
     id:string,refId:string,direction:-1|1,currentPrompt?:string
   )=>{
@@ -780,7 +829,38 @@ function Workspace() {
     update(id,{referenceOrder:next.order,prompt:next.prompt});
   },[referencesFor,update,snapshot]);
 
+  const prepareGenerationProject=useCallback(async(
+    nodeId:string,stagedNodes:StudioNode[]
+  )=>{
+    if(!isLocalGuest||!remoteGuestId)return projectId;
+    const target=stagedNodes.find(node=>node.id===nodeId);
+    const mediaNodeIds=new Set<string>([
+      nodeId,...referencesFor(nodeId).map(ref=>ref.id)
+    ]);
+    if(target?.data.h3FirstFrameId)mediaNodeIds.add(target.data.h3FirstFrameId);
+    if(target?.data.h3LastFrameId)mediaNodeIds.add(target.data.h3LastFrameId);
+    const result=await request<{projectId:string}>(
+      '/api/remote/'+remoteGuestId+'/prepare',JSONBody({
+        nodeId,title,nodes:stagedNodes,edges:edgesRef.current,
+        mediaNodeIds:[...mediaNodeIds]
+      }));
+    if(!localGuestMirrors.current.has(nodeId))
+      localGuestMirrors.current.set(nodeId,new Set());
+    localGuestMirrors.current.get(nodeId)?.add(result.projectId);
+    return result.projectId;
+  },[isLocalGuest,remoteGuestId,projectId,title,referencesFor]);
+  const publishGeneratedMedia=useCallback(async(url:string)=>{
+    if(!isLocalGuest||!remoteGuestId)return url;
+    const published=await request<{url:string}>(
+      '/api/remote/'+remoteGuestId+'/publish',JSONBody({mediaUrl:url}));
+    return published.url;
+  },[isLocalGuest,remoteGuestId]);
+
   const generate = useCallback(async (id:string,kindOverride?:Kind) => {
+    if(shareRef.current.role==='guest'&&!remoteGuestId){
+      notify('请在用户2电脑运行 TapNow start.bat，从用户2本机画布「加入画布」；禁止使用用户1的生成账号');
+      return;
+    }
     const source=nodesRef.current.find(n=>n.id===id);
     if (!source) return;
     const kind=kindOverride || (source.data.kind==='text'?'image':source.data.kind);
@@ -804,7 +884,9 @@ function Workspace() {
       try{
         const accounts=await request<ChatGPTAccount[]>('/api/chatgpt/accounts');
         setChatgptAccounts(accounts);
-        const preferred=source.data.chatgptAccountId||'auto';
+        const preferred=isLocalGuest
+          ?guestAccountChoices[id]?.chatgptAccountId||'auto'
+          :source.data.chatgptAccountId||'auto';
         const account=preferred==='auto'
           ?accounts.find(item=>!item.nativeBrowserOpen)||accounts[0]
           :accounts.find(item=>item.id===preferred);
@@ -827,8 +909,9 @@ function Workspace() {
         });
         setProjects(ps=>ps.map(item=>item.id===projectId
           ?{...item,updatedAt:saved.updatedAt}:item));
+        const localProjectId=await prepareGenerationProject(id,staged);
         const job=await request<ChatGPTImageJob>('/api/chatgpt/jobs',JSONBody({
-          projectId,nodeId:id,prompt:source.data.prompt,
+          projectId:localProjectId,nodeId:id,prompt:source.data.prompt,
           accountId:account.id,
           references:refs.map(ref=>({id:ref.id}))
         }));
@@ -839,7 +922,7 @@ function Workspace() {
           if(!nodesRef.current.some(node=>node.id===id))return;
           if(current.status==='completed'&&current.mediaUrl){
             update(id,{status:'done',progress:100,
-              mediaUrl:current.mediaUrl,
+              mediaUrl:await publishGeneratedMedia(current.mediaUrl),
               mediaWidth:current.mediaWidth,
               mediaHeight:current.mediaHeight,
               jobMessage:current.message,demo:false});
@@ -902,8 +985,9 @@ function Workspace() {
         });
         setProjects(ps=>ps.map(p=>p.id===projectId
           ?{...p,updatedAt:saved.updatedAt}:p));
+        const localProjectId=await prepareGenerationProject(id,staged);
         const job=await request<H3Job>('/api/h3/jobs',JSONBody({
-          projectId,nodeId:id,model:source.data.model,
+          projectId:localProjectId,nodeId:id,model:source.data.model,
           prompt:submittedPrompt,duration:source.data.duration||'6s',
           resolution:source.data.resolution||'768p',
           ratio:source.data.ratio||'16:9',
@@ -916,7 +1000,7 @@ function Workspace() {
           if(!nodesRef.current.some(node=>node.id===id))return;
           if(status.status==='completed'&&status.videoUrl){
             update(id,{status:'done',progress:100,jobMessage:status.message,
-              mediaUrl:status.videoUrl,demo:false});
+              mediaUrl:await publishGeneratedMedia(status.videoUrl),demo:false});
             notify('H3 视频已保存到当前画布');
             return;
           }
@@ -976,9 +1060,16 @@ function Workspace() {
         });
         setProjects(ps=>ps.map(p=>p.id===projectId?
           {...p,updatedAt:saved.updatedAt}:p));
+        const localProjectId=await prepareGenerationProject(id,staged);
+        const preferredMuseAccount=isLocalGuest
+          ?guestAccountChoices[id]?.museAccountId||'auto'
+          :source.data.museAccountId||'auto';
+        const selectedMuseAccount=isLocalGuest&&preferredMuseAccount!=='auto'&&
+          !museAccounts.some(account=>account.id===preferredMuseAccount)
+          ?'auto':preferredMuseAccount;
         const job=await request<MuseJob>('/api/muse/jobs',JSONBody({
-          provider:'muse',projectId,nodeId:id,
-          accountId:source.data.museAccountId||'auto',
+          provider:'muse',projectId:localProjectId,nodeId:id,
+          accountId:selectedMuseAccount,
           prompt:submittedPrompt,ratio:source.data.ratio,
           resolution:kind==='image'?(source.data.resolution||'2K'):undefined,
           duration:source.data.duration||'5s',
@@ -992,7 +1083,8 @@ function Workspace() {
           if(!nodesRef.current.some(n=>n.id===id))return;
           if(status.status==='completed'&&status.mediaUrl){
             update(id,{status:'done',progress:100,demo:false,
-              mediaUrl:status.mediaUrl,jobMessage:'Muse '+(kind==='video'?'视频':'图片')+'已回填'});
+              mediaUrl:await publishGeneratedMedia(status.mediaUrl),
+              jobMessage:'Muse '+(kind==='video'?'视频':'图片')+'已回填'});
             notify('Muse '+(kind==='video'?'视频':'图片')+'生成成功，文件已保存');return;
           }
           if(['needs-attention','needs-login','interrupted'].includes(status.status)){
@@ -1017,7 +1109,14 @@ function Workspace() {
         notify('该视频模型尚未接入真实生成服务，请选择 Seedance 2.0 Mini 或 Fast');
         return;
       }
-      if(!source.data.accountId){
+      const availableDoubao=isLocalGuest
+        ?await request<DoubaoAccount[]>('/api/doubao/accounts').catch(()=>[])
+        :doubaoAccounts;
+      const selectedDoubao=isLocalGuest
+        ?(availableDoubao.find(a=>a.id===guestAccountChoices[id]?.accountId)||
+          availableDoubao[0])?.id
+        :source.data.accountId;
+      if(!selectedDoubao){
         notify('先在账号设置中创建独立豆包浏览器账号，再在视频节点选择账号');
         setPanel('doubao');
         return;
@@ -1061,8 +1160,9 @@ function Workspace() {
           title,nodes:stagedNodes,edges:edgesRef.current,viewport:viewport.current
         });
         setProjects(ps=>ps.map(p=>p.id===projectId?{...p,updatedAt:saved.updatedAt}:p));
+        const localProjectId=await prepareGenerationProject(id,stagedNodes);
         const job=await request<DoubaoJob>('/api/doubao/jobs',JSONBody({
-          projectId,nodeId:id,accountId:source.data.accountId,
+          projectId:localProjectId,nodeId:id,accountId:selectedDoubao,
           model:selectedModel,prompt:submittedPrompt,
           ratio:source.data.ratio,duration:source.data.duration,
           references:refs.map(ref=>({id:ref.id}))
@@ -1074,7 +1174,7 @@ function Workspace() {
           if(!nodesRef.current.some(n=>n.id===id))return;
           if(status.status==='completed' && status.videoUrl){
             update(id,{status:'done',progress:100,jobMessage:'视频已回填到此节点',
-              mediaUrl:status.videoUrl,demo:false});
+              mediaUrl:await publishGeneratedMedia(status.videoUrl),demo:false});
             notify('Seedance 视频已保存到对应节点');
             return;
           }
@@ -1114,9 +1214,19 @@ function Workspace() {
     setEdges(prev=>addEdge({...edgeDefaults,id:uid(),source:id,target:childId},prev));
     notify('已创建演示结果节点（未调用 AI 模型）');
     }finally{
+      if(remoteGuestId){
+        for(const mirror of localGuestMirrors.current.get(id)||[]){
+          void request('/api/remote/'+remoteGuestId+'/prepare/'+mirror,
+            {method:'DELETE'}).catch(()=>{});
+        }
+        localGuestMirrors.current.delete(id);
+      }
       generatingNodeIds.current.delete(id);
     }
-  },[snapshot,update,setNodes,setEdges,notify,projectId,referencesFor,title,museAccounts.length,saveProjectSnapshot]);
+  },[snapshot,update,setNodes,setEdges,notify,projectId,referencesFor,title,
+    museAccounts,doubaoAccounts,guestAccountChoices,saveProjectSnapshot,
+    remoteGuestId,isLocalGuest,
+    prepareGenerationProject,publishGeneratedMedia]);
   const expand = useCallback((id:string) => { setPreview(id); },[]);
   const inspect = useCallback((id:string) => {
     setNodes(prev=>prev.map(n=>({...n,selected:n.id===id})));
@@ -1518,13 +1628,13 @@ function Workspace() {
         <button title="保存工作流 JSON" onClick={exportJSON}><Share2 size={16}/></button>
         <span className="tn-top-divider"/>
         <button title="素材库" onClick={()=>setPanel('assets')}><Layers3 size={16}/></button>
-        {share.role!=='guest'&&<button title="豆包账号与独立浏览器设置" onClick={()=>setPanel(panel==='doubao'?null:'doubao')}><Settings2 size={17}/></button>}
-        {share.role!=='guest'&&<button className="tn-muse-account-link" aria-label="Muse 账号管理"
+        {(share.role!=='guest'||isLocalGuest)&&<button title="豆包账号与独立浏览器设置" onClick={()=>setPanel(panel==='doubao'?null:'doubao')}><Settings2 size={17}/></button>}
+        {(share.role!=='guest'||isLocalGuest)&&<button className="tn-muse-account-link" aria-label="Muse 账号管理"
           title="Muse 账号与独立 Edge 浏览器管理"
           onClick={()=>setPanel(panel==='muse'?null:'muse')}>
           <Shield size={15}/><span>Muse 账号</span>
         </button>}
-        {share.role!=='guest'&&<button className="tn-muse-account-link" aria-label="H3 API 设置"
+        {(share.role!=='guest'||isLocalGuest)&&<button className="tn-muse-account-link" aria-label="H3 API 设置"
           title="元铂AI H3 API Key"
           onClick={()=>setPanel(panel==='h3'?null:'h3')}>
           <Sparkles size={15}/><span>H3 API</span>
@@ -1565,7 +1675,7 @@ function Workspace() {
         <button className="tn-share-copy" onClick={()=>void navigator.clipboard?.writeText(share.code||'')}>
           复制加入码
         </button>
-        <p>把下方局域网地址发给用户2，用户2打开后输入加入码：</p>
+        <p>把下方局域网地址和加入码发给用户2。用户2应在自己的电脑启动 TapNow，从本机画布的「加入画布」入口连接，使用自己的生成账号。直接打开下方地址只能协作编辑，不能生成。</p>
         {(share.links||[]).map(link=><div key={link} className="tn-share-link">
           <span>{link}</span>
           <button onClick={()=>void navigator.clipboard?.writeText(link)}>复制</button>
@@ -1574,7 +1684,9 @@ function Workspace() {
           .then(()=>{setSharePopup(false);notify('已关闭共享画布');})
           .catch(error=>notify(error.message))}>结束共享</button>
       </>:share.role==='guest'?<>
-        <p>已加入用户1的画布。你添加或生成的节点、图片和视频保存在主机电脑。</p>
+        <p>{isLocalGuest
+          ?'已通过本机生成服务加入。生成使用你自己的账号和浏览器，结果会同步保存到主机画布。'
+          :'已加入共享画布。当前为直接网页加入，仅支持协作编辑。要用自己的账号生成，请启动本机 TapNow 并从「加入画布」进入。'}</p>
         <button className="tn-share-danger" onClick={()=>void collaboration.leave()
           .then(()=>setSharePopup(false)).catch(error=>notify(error.message))}>退出共享</button>
       </>:<>
@@ -1594,7 +1706,7 @@ function Workspace() {
     {share.role==='join'&&<div className="tn-share-join-screen">
       <div className="tn-share-join-card">
         <strong>加入团队共享画布</strong>
-        <p>请输入主机提供的 5 位数字加入码。画布和生成素材保存在主机电脑。</p>
+        <p>输入主机的 5 位加入码即可协作编辑。要生图或生成视频，请在自己的电脑启动 TapNow，通过本机「加入画布」连接，使用自己的账号和浏览器。</p>
         <form onSubmit={event=>{
           event.preventDefault();
           setJoinError('');
