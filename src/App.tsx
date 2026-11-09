@@ -21,6 +21,7 @@ import {FlowEdge} from './FlowEdge';
 import {SelectionGroupControls} from './SelectionGroupControls';
 import {CanvasGroupLayer} from './CanvasGroupLayer';
 import {useSharedCanvas} from './useSharedCanvas';
+import {uuid as uid} from './uuid';
 import {planGroupConnections} from './node-alignment.mjs';
 import {snapNodePositionChanges} from './node-smart-guides.mjs';
 import type {SmartGuides} from './node-smart-guides.mjs';
@@ -49,7 +50,6 @@ const entryTools: { kind: Kind; label: string; desc: string; icon: typeof ImageI
   { kind: 'video', label: '视频生成', desc: '文生视频、首尾帧', icon: Clapperboard },
   { kind: 'audio', label: '音频生成', desc: '配乐、音效、旁白', icon: AudioLines }
 ];
-const uid = () => crypto.randomUUID();
 const groupColorAt = (index:number) =>
   'hsl(' + ((index*137.507764+24)%360).toFixed(4) + ' ' +
   (65+Math.floor(index/360)%4*6) + '% ' +

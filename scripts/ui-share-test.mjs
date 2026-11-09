@@ -152,6 +152,26 @@ try{
   await guest.mouse.click(1550,860);
   await host.locator('.react-flow__node[data-id="b"]')
     .getByTestId('shared-node-locked').waitFor({state:'hidden'});
+  // LAN HTTP is not a secure context (unlike localhost). Verify the actual
+  // network guest can boot without crypto.randomUUID().
+  const links=await host.evaluate(async()=>
+    (await (await fetch('/api/share/info')).json()).links||[]);
+  const lanLink=links.find(url=>url.includes('192.168.'))||links[0];
+  if(lanLink){
+    const lanGuest=await browser.newPage({viewport:{width:1680,height:1000}});
+    lanGuest.on('pageerror',error=>errors.push(error.message));
+    await lanGuest.goto(lanLink+'#join='+code,{waitUntil:'domcontentloaded'});
+    assert.equal(await lanGuest.evaluate(()=>window.isSecureContext),false);
+    assert.equal(await lanGuest.evaluate(()=>typeof crypto.randomUUID),'undefined');
+    try{
+      await lanGuest.locator('.react-flow__node[data-id="a"]')
+        .waitFor({timeout:8000});
+    }catch(error){
+      throw new Error('LAN guest did not render: '+errors.join(' | ')+
+        '; '+error.message);
+    }
+    await lanGuest.close();
+  }
   assert.deepEqual(errors,[]);
   console.log('PASS: two browsers join, two-way lock ownership, live drag, both sides add nodes, shared colored frames');
 }finally{

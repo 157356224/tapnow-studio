@@ -3,6 +3,7 @@ import {
   snapshotCanvas,diffCanvas,emptyCanvasPatch,rebaseLocalCanvas,withLocalNodeSelection
 } from './share-sync.mjs';
 import type {CanvasGroup,Project,StudioEdge,StudioNode} from './types';
+import {uuid} from './uuid';
 
 export type ShareRole='loading'|'none'|'join'|'host'|'guest';
 export type ShareInfo={
@@ -27,7 +28,7 @@ const clientStorageKey='tapnow-collaboration-client';
 function clientId(){
   let stored=sessionStorage.getItem(clientStorageKey);
   if(!stored){
-    stored=crypto.randomUUID();
+    stored=uuid();
     sessionStorage.setItem(clientStorageKey,stored);
   }
   return stored;
