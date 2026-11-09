@@ -10,7 +10,7 @@ import {
   ChevronLeft, ChevronRight, CircleHelp, Clapperboard, Cloud, Copy, Download,
   Ellipsis, FilePlus2, FileText, FolderOpen, Grid3X3, Image as ImageIcon, Layers3, LayoutGrid,
   Maximize, Menu, MessageCircle, Minus, MousePointer2, PanelRightClose, PanelRightOpen,
-  Plus, Redo2, Search, Settings2, Share2, SlidersHorizontal, Sparkles, Square,
+  Plus, Redo2, Search, Settings2, Share2, LogIn, SlidersHorizontal, Sparkles, Square,
   Type, Undo2, Upload, Video, WandSparkles, Workflow, X, ZoomIn, ZoomOut, Play,
   SquareDashedMousePointer, Trash2, LoaderCircle, CheckCircle2, Shield, Scissors
 } from 'lucide-react';
@@ -111,9 +111,39 @@ function Workspace() {
   const [edges, setEdges, onEdgesChange] = useEdgesState<StudioEdge>([]);
   const [groups, setGroups] = useState<CanvasGroup[]>([]);
   const [sharePopup,setSharePopup]=useState(false);
+  const [joinPopup,setJoinPopup]=useState(false);
+  const [hostAddress,setHostAddress]=useState('');
   const [shareStarting,setShareStarting]=useState(false);
   const [joinCode,setJoinCode]=useState('');
   const [joinError,setJoinError]=useState('');
+  const joinFromLocalCanvas=(event:React.FormEvent<HTMLFormElement>)=>{
+    event.preventDefault();
+    setJoinError('');
+    try{
+      const address=hostAddress.trim();
+      const url=new URL(/^https?:\/\//i.test(address)?address:'http://'+address);
+      const host=url.hostname;
+      const octets=host.split('.').map(Number);
+      const privateAddress=/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)&&
+        octets.every(octet=>Number.isInteger(octet)&&octet>=0&&octet<=255)&&
+        (octets[0]===10||(octets[0]===192&&octets[1]===168)||
+          (octets[0]===172&&octets[1]>=16&&octets[1]<=31));
+      if(url.protocol!=='http:'||url.username||url.password||
+         (!privateAddress&&!['localhost','127.0.0.1'].includes(host)))
+        throw new Error('请输入主机的局域网 IP 地址，例如 192.168.1.6:3702');
+      if(!/^\d{5}$/.test(joinCode))
+        throw new Error('请输入主机提供的 5 位加入码');
+      // The fragment is never sent to the host over HTTP. The guest page
+      // consumes it once and exchanges it for its own HttpOnly session.
+      url.port=url.port||'3702';
+      url.pathname='/';url.search='';
+      url.hash='join='+joinCode;
+      window.open(url.toString(),'_blank','noopener,noreferrer');
+      setJoinPopup(false);
+    }catch(error){
+      setJoinError(error instanceof Error?error.message:'无法识别主机地址');
+    }
+  };
   const [projectId, setProjectId] = useState('');
   const [title, setTitle] = useState('Untitled');
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -212,6 +242,19 @@ function Workspace() {
     projectId,ready,nodes,edges,groups,title,groupColorCursor:groupColorCursorRef,
     nodesRef,edgesRef,groupsRef,setNodes,setEdges,setGroups,setTitle,notify
   });
+  useEffect(()=>{
+    if(collaboration.share.role!=='join')return;
+    const match=/^#join=(\d{5})$/.exec(window.location.hash);
+    if(!match)return;
+    // Remove the one-time code from the visible URL before joining.
+    window.history.replaceState(null,'',window.location.pathname+window.location.search);
+    setJoinCode(match[1]);
+    setJoinError('');
+    void collaboration.join(match[1]).then(()=>{
+      setSharePopup(false);
+      setJoinCode('');
+    }).catch(error=>setJoinError(error instanceof Error?error.message:'加入失败'));
+  },[collaboration.share.role,collaboration.join]);
   const {share,shareRef,active:sharing,locks:shareLocks,online:shareMembers,
     ownId:shareClientId,flush:flushShared,initializeFromProject,
     acquire:acquireShareLock,release:releaseShareLock,
@@ -1499,6 +1542,11 @@ function Workspace() {
           onClick={()=>setPanel(panel==='projects'?null:'projects')}><ChevronDown size={13}/></button>
       </div>
       <div className="tn-top-actions">
+        {share.role!=='guest'&&<button type="button" className="tn-share-entry"
+          title="加入别人的画布" aria-label="加入别人的画布"
+          onClick={()=>{setSharePopup(false);setJoinError('');setJoinPopup(true);}}>
+          <LogIn size={16}/><span>加入画布</span>
+        </button>}
         <button type="button" className={'tn-share-entry'+(sharing?' is-sharing':'')}
           title="局域网共享画布" aria-label="局域网共享画布"
           onClick={()=>setSharePopup(current=>!current)}>
@@ -1524,6 +1572,26 @@ function Workspace() {
         <button title="工作流模板" onClick={()=>setShowTemplates(true)}><LayoutGrid size={16}/></button>
       </div>
     </div>
+    {joinPopup&&<div className="tn-share-join-screen" data-testid="join-other-canvas">
+      <div className="tn-share-join-card">
+        <div className="tn-share-heading"><strong>加入别人的画布</strong>
+          <button aria-label="关闭加入画布" onClick={()=>setJoinPopup(false)}><X size={15}/></button>
+        </div>
+        <p>输入主机共享面板中的局域网地址和 5 位加入码。会在新标签页打开协作画布，不影响当前画布。</p>
+        <form className="tn-share-join-form" onSubmit={joinFromLocalCanvas}>
+          <label htmlFor="tn-share-host-address">主机局域网地址</label>
+          <input id="tn-share-host-address" type="text" autoComplete="off"
+            aria-label="主机局域网地址" placeholder="192.168.1.6:3702"
+            value={hostAddress} onChange={event=>setHostAddress(event.target.value)}/>
+          <label htmlFor="tn-share-join-code">5 位加入码</label>
+          <input id="tn-share-join-code" inputMode="numeric" autoComplete="off"
+            aria-label="加入别人的画布加入码" placeholder="12345" maxLength={5}
+            value={joinCode} onChange={event=>setJoinCode(event.target.value.replace(/\D/g,''))}/>
+          <button disabled={!hostAddress.trim()||!/^\d{5}$/.test(joinCode)}>连接并加入</button>
+        </form>
+        {joinError&&<p className="tn-share-error">{joinError}</p>}
+      </div>
+    </div>}
     {sharePopup&&<div className="tn-share-popover" data-testid="share-popover">
       <div className="tn-share-heading"><strong>局域网团队共享</strong>
         <button aria-label="关闭共享设置" onClick={()=>setSharePopup(false)}><X size={15}/></button>

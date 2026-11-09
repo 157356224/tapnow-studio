@@ -56,9 +56,9 @@ let browser;
 try{
   browser=await chromium.launch({channel:'msedge',headless:true});
   const host=await browser.newPage({viewport:{width:1680,height:1000}});
-  const guest=await browser.newPage({viewport:{width:1680,height:1000}});
+  const guestEntry=await browser.newPage({viewport:{width:1680,height:1000}});
   const errors=[];
-  for(const page of [host,guest]){
+  for(const page of [host,guestEntry]){
     page.on('pageerror',error=>errors.push(error.message));
     page.setDefaultTimeout(15000);
   }
@@ -71,12 +71,22 @@ try{
   await host.getByTestId('share-code').waitFor();
   const code=(await host.getByTestId('share-code').innerText()).trim();
   assert.match(code,/^\d{5}$/);
-  await guest.goto('http://127.0.0.1:'+shared.info().port+'/',{
+  await guestEntry.goto('http://127.0.0.1:'+server.address().port+'/',{
     waitUntil:'domcontentloaded'
   });
-  await guest.getByRole('textbox',{name:'5位加入码'}).fill(code);
-  await guest.getByRole('button',{name:'加入画布'}).click();
+  await guestEntry.getByRole('button',{name:'加入别人的画布'}).click();
+  await guestEntry.getByRole('textbox',{name:'主机局域网地址'})
+    .fill('127.0.0.1:'+shared.info().port);
+  await guestEntry.getByRole('textbox',{name:'加入别人的画布加入码'})
+    .fill(code);
+  const nextPage=guestEntry.context().waitForEvent('page');
+  await guestEntry.getByRole('button',{name:'连接并加入'}).click();
+  const guest=await nextPage;
+  guest.on('pageerror',error=>errors.push(error.message));
+  guest.setDefaultTimeout(15000);
   await guest.locator('.react-flow__node[data-id="a"]').waitFor();
+  assert.equal(new URL(guest.url()).hash,'',
+    'one-time join code must be removed from address bar after joining');
   await host.getByRole('button',{name:'关闭共享设置'}).click();
 
   // Host locks node A by opening its editor, guest sees and cannot drag it.

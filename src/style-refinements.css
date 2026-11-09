@@ -455,6 +455,13 @@
   background:#3b8a5a;color:#fff;cursor:pointer}
 .tn-share-join-card button:disabled{opacity:.4;cursor:not-allowed}
 .tn-share-join-card .tn-share-error{color:#f6a7a7}
+.tn-share-join-card .tn-share-join-form{display:flex;flex-direction:column;align-items:stretch;gap:9px}
+.tn-share-join-form label{font-size:12px;color:#dfdfeb;font-weight:600;margin-top:5px}
+.tn-share-join-card .tn-share-join-form input{text-align:left;font-size:14px;
+  letter-spacing:normal;padding:10px 12px;flex:none}
+.tn-share-join-card .tn-share-join-form input[inputmode="numeric"]{
+  font-size:22px;letter-spacing:6px;text-align:center}
+.tn-share-join-form button{padding:11px 16px;margin-top:6px}
 .tn-node{position:relative}
 .tn-share-node-locked{position:absolute;inset:0;z-index:30;pointer-events:auto;
   display:flex;align-items:center;justify-content:center;
