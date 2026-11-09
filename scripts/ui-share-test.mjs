@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import express from 'express';
+import fs from 'node:fs';
 import {chromium} from 'playwright';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -47,6 +48,8 @@ const shared=mountShareRoutes(app,{
   read,write,root,uploadDir:path.join(root,'uploads'),lanPort:0
 });
 const dist=path.join(root,'..','dist');
+const indexFile=path.join(dist,'index.html');
+let originalIndex=null;
 app.use(express.static(dist,{index:false}));
 app.get('/{*path}',(_req,res)=>res.sendFile(path.join(dist,'index.html')));
 const server=await new Promise(resolve=>{
@@ -66,9 +69,19 @@ try{
     waitUntil:'domcontentloaded'
   });
   await host.locator('.react-flow__node[data-id="a"]').waitFor();
+  // Simulate a previous Git revision's compiled page still in dist/.
+  // Starting a share must replace it even though index.html already exists.
+  originalIndex=fs.readFileSync(indexFile,'utf8');
+  const obsoleteIndex=originalIndex.replace(
+    /index-[A-Za-z0-9_-]+\.js/,'index-obsolete-bundle.js');
+  assert.notEqual(obsoleteIndex,originalIndex);
+  fs.writeFileSync(indexFile,obsoleteIndex);
   await host.getByRole('button',{name:'局域网共享画布'}).click();
   await host.getByRole('button',{name:'开启共享画布'}).click();
   await host.getByTestId('share-code').waitFor();
+  assert.doesNotMatch(fs.readFileSync(indexFile,'utf8'),/index-obsolete-bundle\.js/,
+    'guest must not receive the stale bundle from dist/');
+  originalIndex=null;
   const code=(await host.getByTestId('share-code').innerText()).trim();
   assert.match(code,/^\d{5}$/);
   await guestEntry.goto('http://127.0.0.1:'+server.address().port+'/',{
@@ -160,7 +173,10 @@ try{
   if(lanLink){
     const lanGuest=await browser.newPage({viewport:{width:1680,height:1000}});
     lanGuest.on('pageerror',error=>errors.push(error.message));
-    await lanGuest.goto(lanLink+'#join='+code,{waitUntil:'domcontentloaded'});
+    const navigation=await lanGuest.goto(lanLink+'#join='+code,
+      {waitUntil:'domcontentloaded'});
+    assert.match(navigation.headers()['cache-control']||'',/no-store/);
+    assert.doesNotMatch(await lanGuest.content(),/index-obsolete-bundle\.js/);
     assert.equal(await lanGuest.evaluate(()=>window.isSecureContext),false);
     assert.equal(await lanGuest.evaluate(()=>typeof crypto.randomUUID),'undefined');
     try{
@@ -175,6 +191,10 @@ try{
   assert.deepEqual(errors,[]);
   console.log('PASS: two browsers join, two-way lock ownership, live drag, both sides add nodes, shared colored frames');
 }finally{
+  // Do not leave a deliberately broken HTML file if the assertion fails.
+  if(originalIndex&&fs.existsSync(indexFile)&&
+     fs.readFileSync(indexFile,'utf8').includes('index-obsolete-bundle.js'))
+    fs.writeFileSync(indexFile,originalIndex);
   await shared.stop().catch(()=>{});
   await browser?.close();
   await new Promise(resolve=>server.close(resolve));

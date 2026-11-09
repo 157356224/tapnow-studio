@@ -35,9 +35,8 @@ const addresses=()=>[...new Set(Object.values(os.networkInterfaces()).flat()
 
 async function ensureGuestBundle(projectDir){
   const target=path.join(projectDir,'dist','index.html');
-  if(fs.existsSync(target))return;
-  // A freshly cloned project has no dist/ (gitignored). Build only when
-  // somebody starts LAN sharing for the first time.
+  // dist/ is gitignored, so pulling a source fix does not update it. Rebuild
+  // before each new share to avoid serving an obsolete LAN guest bundle.
   for(const args of [
     [path.join(projectDir,'node_modules','typescript','bin','tsc'),'-b'],
     [path.join(projectDir,'node_modules','vite','bin','vite.js'),'build']
@@ -445,8 +444,13 @@ export function mountShareRoutes(app,{
   }
   lanApp.use('/api',requireGuest,proxy);
   const dist=path.join(root,'..','dist');
-  lanApp.use(express.static(dist,{index:false}));
-  lanApp.get('/{*path}',(_req,res)=>res.sendFile(path.join(dist,'index.html')));
+  lanApp.use(express.static(dist,{index:false,setHeaders:(res,file)=>{
+    if(file.endsWith('.html'))res.setHeader('Cache-Control','no-store');
+  }}));
+  lanApp.get('/{*path}',(_req,res)=>{
+    res.setHeader('Cache-Control','no-store');
+    res.sendFile(path.join(dist,'index.html'));
+  });
   return {info:()=>({active:!!active,projectId:active?.projectId,port:sharedPort()}),
     stop};
 }

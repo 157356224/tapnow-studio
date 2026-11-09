@@ -1,10 +1,14 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const projectDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const shareSourceRevision=crypto.createHash('sha256')
+  .update(fs.readFileSync(path.join(projectDir,'server','share.mjs')))
+  .digest('hex').slice(0,16);
 const base='http://127.0.0.1';
 const apiPort=3701;
 const webPort=5173;
@@ -100,6 +104,10 @@ async function main(){
     if(health.workspaceId&&health.workspaceId!==instanceId)
       throw new Error('端口 3701 上运行的是另一个 TapNow 项目。'+
         '请先关闭旧项目的启动窗口，再运行当前目录的 start.bat。');
+    if(health.shareSourceRevision!==shareSourceRevision)
+      throw new Error('端口 3701 仍在运行旧版共享画布服务。'+
+        '请关闭旧的 TapNow 启动窗口/服务进程，然后重新运行 start.bat。'+
+        '只更新 GitHub 代码不会自动替换已经运行的 Node.js 进程。');
     if(health.multiImageUploadRevision!=='v3-prompt-first')
       throw new Error('端口 3701 仍在运行旧版豆包多图上传服务。'+
         '请先关闭旧的 TapNow API 进程（node server/index.mjs），'+

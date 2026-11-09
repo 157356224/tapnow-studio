@@ -14,6 +14,11 @@ import {mountChatGPTRoutes,preserveChatGPTCompletedMedia} from './chatgpt.mjs';
 import {mountShareRoutes} from './share.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
+// Snapshot the loaded share implementation at process start. A later Git
+// update changes the file on disk, but cannot update this running module.
+const shareSourceRevision=crypto.createHash('sha256')
+  .update(fs.readFileSync(path.join(root,'share.mjs')))
+  .digest('hex').slice(0,16);
 const dataDir = path.join(root, 'data');
 const uploadDir = path.join(root, 'uploads');
 const dbFile = path.join(dataDir, 'projects.json');
@@ -62,6 +67,7 @@ const upload = multer({
 app.get('/api/health', (_req, res) => res.json({
   ok:true,mode:'local-canvas',aiProviders:0,
   lanShareRevision:'sse-collab-v1',
+  shareSourceRevision,
   browserBridges:['doubao-seedance-v2','muse-edge-chat'],
   museBridgeRevision:'quota-auto-v6-image-resolution',
   museMediaRevision:'fresh-chat-media-v2',
