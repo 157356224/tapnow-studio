@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { StudioActionsContext } from './StudioActionsContext';
 import type { StudioNode } from './types';
-import { defaultVideoModel, h3VideoModelOptions, models, videoModelOptions } from './sample';
+import { defaultVideoModel, doubaoCanvasModel, doubaoCanvasVideoOptions, h3VideoModelOptions, models, videoModelOptions } from './sample';
 import { VideoPromptEditor } from './VideoPromptEditor';
 import { ComposingTextarea } from './ComposingTextarea';
 import { GenerationVisualCanvas } from './GenerationVisualCanvas';
@@ -211,6 +211,7 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
   const museMode=(kind==='video'||kind==='image')&&provider==='muse';
   const chatgptMode=kind==='image'&&provider==='chatgpt';
   const h3Mode=kind==='video'&&provider==='h3';
+  const canvasMode=kind==='video'&&provider==='doubao-canvas';
   const account=museMode
     ?api.museAccounts.find(a=>a.id===data.museAccountId)
     :api.accounts.find(a=>a.id===data.accountId);
@@ -471,7 +472,7 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
             data-progress={data.progress}>
             {Math.min(100,Math.round(data.progress))}%
           </span>}
-        {kind==='video'&&provider==='doubao'&&
+        {kind==='video'&&(provider==='doubao'||canvasMode)&&
           <span className="tn-video-generation-stage" aria-live="polite"
             data-video-started={data.status==='running'?'true':'false'}>
             {data.status==='running'?'视频已开始生成':
@@ -637,7 +638,7 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
               <div className={'tn-dropdown tn-video-model-menu'+(modelClosing?' tn-settings-closing':'')}
                 role="listbox" aria-label="视频模型" aria-hidden={modelClosing}
                 onPointerDown={e=>e.stopPropagation()}>
-                {(h3Mode?h3VideoModelOptions:videoModelOptions).map(option=><button key={option.name}
+                {(h3Mode?h3VideoModelOptions:canvasMode?doubaoCanvasVideoOptions:videoModelOptions).map(option=><button key={option.name}
                   type="button" role="option"
                   aria-selected={selectedModel===option.name}
                   className={'tn-video-model-row'+(selectedModel===option.name?' is-selected':'')}
@@ -728,7 +729,8 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
                 </>}
                 <div className="tn-video-setting-heading">生成时长</div>
                 <div className="tn-video-durations">
-                  {Array.from({length:museMode?7:h3Mode?(selectedModel==='h3-video'?27:12):12},(_,i)=>i+4).map(n=><button key={n}
+                  {(canvasMode?[4,5,8,10,15]:
+                    Array.from({length:museMode?7:h3Mode?(selectedModel==='h3-video'?27:12):12},(_,i)=>i+4)).map(n=><button key={n}
                     className={(data.duration||'5s')===n+'s'?'active':''}
                     onClick={()=>api.update(id,{duration:n+'s'})}>{n}s</button>)}
                 </div>
@@ -751,34 +753,47 @@ export function StudioNodeV2({ id, data, selected }: NodeProps<StudioNode>) {
                   costQuote.credits%1===0?2:3
                 )}</small></>
                 :<span>{h3Mode?(costLoading?'计算积分中…':'积分待查询'):
-                  chatgptMode?'ChatGPT 额度':'积分：—'}</span>}
+                  chatgptMode?'ChatGPT 额度':canvasMode?'豆包画布 · 单次生成':'积分：—'}</span>}
             </span>}
-            <button className="tn-submit" title={h3Mode?'使用元铂AI H3 生成视频':
+            {canvasMode&&['queued','running'].includes(data.status||'')&&
+              <button type="button" title="停止豆包画布任务"
+                onClick={()=>void api.cancelCanvasJob(id)}>停止</button>}
+            <button className="tn-submit" title={canvasMode?'使用豆包画布生成视频':
+              h3Mode?'使用元铂AI H3 生成视频':
               museMode?'使用 Muse 生成'+(kind==='video'?'视频':'图片'):
               kind==='video'?'使用选定豆包账号生成视频':'生成内容'}
               onClick={()=>void api.generate(id)}><ArrowUp size={16}/></button>
           </div>
         </div>
         {(kind==='video'||museMode)&&<div className="tn-job-caption">
-          {data.jobMessage|| (h3Mode?'H3 API · '+selectedModel:
+          {data.jobMessage|| (canvasMode?'豆包画布 · 匿名单次生成':
+            h3Mode?'H3 API · '+selectedModel:
             account?'使用 '+account.name+' 的独立 Edge 浏览器':
             museMode?'自动选择剩余额度最多的 Muse 账号':
               '选择账号后发送到 '+selectedModel)}
         </div>}
+        {canvasMode&&!!data.jobLogs?.length&&
+          <details className="tn-canvas-generation-logs">
+            <summary>生成日志（{data.jobLogs.length} 条）</summary>
+            <pre>{data.jobLogs.join('\n')}</pre>
+          </details>}
       </div>
       {kind==='video'&&<div className={'tn-provider-switch tn-provider-switch-outside'+
         (closingComposer?' tn-editor-closing':'')} role="group"
         aria-label="生成服务">
         {[
-          {id:'doubao',label:'豆包生成'},{id:'muse',label:'Muse 生成'},
+          {id:'doubao',label:'豆包生成'},{id:'doubao-canvas',label:'豆包画布'},
+          {id:'muse',label:'Muse 生成'},
           {id:'h3',label:'H3 API'}
         ].map(item=><button key={item.id} type="button"
           className={provider===item.id?'active':''}
           aria-pressed={provider===item.id}
           onClick={()=>{
-            api.update(id,{provider:item.id as 'doubao'|'muse'|'h3',
+            api.update(id,{provider:item.id as 'doubao'|'doubao-canvas'|'muse'|'h3',
               ...(item.id==='h3'?{
                 model:'h3-video',duration:'6s',resolution:'768p'
+              }:item.id==='doubao-canvas'?{
+                model:doubaoCanvasModel,duration:'5s',resolution:'720p'
               }:item.id==='doubao'||item.id==='muse'?{
                 model:defaultVideoModel,duration:'5s',resolution:'720p'
               }:{}),

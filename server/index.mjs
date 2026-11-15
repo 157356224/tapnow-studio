@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mountDoubaoRoutes } from './doubao.mjs';
+import {mountDoubaoCanvasRoutes} from './doubao-canvas.mjs';
 import { preserveCompletedVideoMedia } from './doubao-project.mjs';
 import {mountMuseRoutes} from './muse.mjs';
 import {preserveMuseCompletedMedia} from './muse-project.mjs';
@@ -31,7 +32,7 @@ app.use(express.json({ limit: '15mb' }));
 app.disable('x-powered-by');
 // Prevent unrelated web pages from issuing credential-related requests against
 // this loopback API using the logged-in user's browser.
-app.use(['/api/doubao','/api/muse'],(req,res,next)=>{
+app.use(['/api/doubao','/api/muse','/api/doubao-canvas'],(req,res,next)=>{
   const host=req.headers.host||'';
   if(!['127.0.0.1:3701','localhost:3701'].includes(host))
     return res.status(403).json({error:'仅允许本机访问账号接口'});
@@ -79,6 +80,7 @@ app.get('/api/health', (_req, res) => res.json({
   videoModelRevision:'mini-fast-v1',
   videoStartRevision:'reply-prefix-v1',
   videoDownloadRevision:'completed-card-v1',
+  doubaoCanvasRevision:'single-anonymous-v1',
   liveVideoGenerationVerified:false,
   workspaceId:crypto.createHash('sha256').update(
     process.platform==='win32'?path.resolve(root,'..').toLowerCase():
@@ -187,6 +189,7 @@ app.post('/api/videos/extract-frame',async(req,res,next)=>{
 });
 app.use('/api/uploads', express.static(uploadDir, { dotfiles: 'deny' }));
 mountDoubaoRoutes(app,read,write);
+mountDoubaoCanvasRoutes(app,read,write,{dataDir,uploadDir});
 mountMuseRoutes(app,read,write);
 mountH3Routes(app,read,write,{dataDir,uploadDir});
 mountChatGPTRoutes(app,read,write,{dataDir,uploadDir});

@@ -24,7 +24,7 @@ import {guestRoute,guestMediaURL,remoteGuestSession} from './remoteGuest';
 import {planGroupConnections} from './node-alignment.mjs';
 import {snapNodePositionChanges} from './node-smart-guides.mjs';
 import type {SmartGuides} from './node-smart-guides.mjs';
-import { defaultVideoModel, h3VideoModels, kindLabels, models, newData, normalizeVideoNodes, sampleAdCanvas, sampleCanvas, supportedDoubaoVideoModels } from './sample';
+import { defaultVideoModel, doubaoCanvasModel, h3VideoModels, kindLabels, models, newData, normalizeVideoNodes, sampleAdCanvas, sampleCanvas, supportedDoubaoVideoModels } from './sample';
 import { composeVideoPrompt, referencesForNode, resolveReferences, reorderReferenceNodes } from './doubao';
 import type { DoubaoAccount, DoubaoJob } from './doubao';
 import { AccountsPanel } from './AccountsPanel';
@@ -55,6 +55,11 @@ const groupColorAt = (index:number) =>
   (62+Math.floor(index/1440)%3*5) + '%)';
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 type Panel = 'agent' | 'projects' | 'assets' | 'inspector' | 'doubao' | 'muse' | 'h3' | 'chatgpt' | null;
+type DoubaoCanvasJob={
+  id:string;status:'queued'|'running'|'completed'|'failed'|'interrupted';
+  progress:number;message:string;error?:string;videoUrl?:string;
+  steps?:{at:string;message:string;progress:number}[];
+};
 type ChatGPTImageJob={
   id:string;status:'queued'|'starting'|'running'|'completed'|'error'|'needs-login'|'interrupted';
   progress:number|null;message:string;error?:string;mediaUrl?:string;
@@ -915,7 +920,8 @@ function Workspace() {
           accountId:account.id,
           references:refs.map(ref=>({id:ref.id}))
         }));
-        update(id,{jobId:job.id,status:'queued',progress:0,jobMessage:job.message});
+        update(id,{jobId:job.id,status:'queued',progress:0,jobMessage:job.message,
+          jobLogs:[job.message]});
         for(let count=0;count<1000;count++){
           await pause(1800);
           const current=await request<ChatGPTImageJob>('/api/chatgpt/jobs/'+job.id);
@@ -1103,6 +1109,69 @@ function Workspace() {
       }
       return;
     }
+    if(kind==='video'&&source.data.provider==='doubao-canvas'){
+      if(!projectId){notify('请先保存画布');return;}
+      let canvasRefs:ReturnType<typeof resolveReferences>;
+      try{
+        canvasRefs=resolveReferences(source.data.prompt||'',
+          source.data.referenceIds||[],referencesFor(id));
+        if(canvasRefs.some(ref=>ref.kind!=='image'))
+          throw new Error('豆包画布仅支持图片参考，不支持音频引用');
+        if(canvasRefs.length>10)throw new Error('豆包画布最多支持 10 张参考图');
+      }catch(error){notify((error as Error).message);return;}
+      try{
+        const health=await request<{doubaoCanvasRevision?:string}>('/api/health');
+        if(health.doubaoCanvasRevision!=='single-anonymous-v1')
+          throw new Error('本机豆包画布 API 版本过旧，请重启 start.bat');
+        if(timer.current)clearTimeout(timer.current);
+        const staged=nodesRef.current.map(node=>node.id===id
+          ?{...node,data:{...node.data,status:'queued' as const,
+            progress:0,jobMessage:'豆包画布：准备单次生成'}}
+          :node);
+        nodesRef.current=staged;setNodes(staged);
+        const saved=await saveProjectSnapshot(projectId,{
+          title,nodes:staged,edges:edgesRef.current,viewport:viewport.current
+        });
+        setProjects(ps=>ps.map(item=>item.id===projectId
+          ?{...item,updatedAt:saved.updatedAt}:item));
+        const localProjectId=await prepareGenerationProject(id,staged);
+        const job=await request<DoubaoCanvasJob>('/api/doubao-canvas/jobs',JSONBody({
+          projectId:localProjectId,nodeId:id,prompt:source.data.prompt||'',
+          ratio:source.data.ratio||'16:9',duration:source.data.duration||'5s',
+          references:canvasRefs.map(ref=>({id:ref.id}))
+        }));
+        update(id,{jobId:job.id,status:'queued',progress:0,jobMessage:job.message});
+        for(let attempt=0;attempt<800;attempt++){
+          await pause(1800);
+          const status=await request<DoubaoCanvasJob>('/api/doubao-canvas/jobs/'+job.id);
+          if(!nodesRef.current.some(node=>node.id===id))return;
+          if(status.status==='completed'&&status.videoUrl){
+            update(id,{status:'done',progress:100,demo:false,
+              mediaUrl:await publishGeneratedMedia(status.videoUrl),
+              jobLogs:status.steps?.map(step=>step.message),
+              jobMessage:'豆包画布视频已回填'});
+            notify('豆包画布视频已生成并保存到当前画布');
+            return;
+          }
+          if(['failed','interrupted'].includes(status.status)){
+            update(id,{status:'error',progress:0,
+              jobLogs:status.steps?.map(step=>step.message),
+              jobMessage:status.error||status.message});
+            notify('豆包画布任务未完成：'+(status.error||status.message));
+            return;
+          }
+          update(id,{status:status.status==='queued'?'queued':'running',
+            progress:status.progress||0,jobMessage:status.message,
+            jobLogs:status.steps?.map(step=>step.message)});
+        }
+        update(id,{status:'error',progress:0,
+          jobMessage:'豆包画布任务等待超时'});
+      }catch(error){
+        update(id,{status:'error',progress:0,jobMessage:(error as Error).message});
+        notify('豆包画布生成失败：'+(error as Error).message);
+      }
+      return;
+    }
     if(kind==='video'){
       const selectedModel=source.data.model||defaultVideoModel;
       if(!supportedDoubaoVideoModels.some(model=>model===selectedModel)){
@@ -1227,13 +1296,25 @@ function Workspace() {
     museAccounts,doubaoAccounts,guestAccountChoices,saveProjectSnapshot,
     remoteGuestId,isLocalGuest,
     prepareGenerationProject,publishGeneratedMedia]);
+  const cancelCanvasJob=useCallback(async(id:string)=>{
+    const node=nodesRef.current.find(item=>item.id===id);
+    if(!node?.data.jobId)return;
+    try{
+      await request('/api/doubao-canvas/jobs/'+node.data.jobId+'/cancel',{
+        method:'POST'
+      });
+      update(id,{status:'error',progress:0,jobMessage:'已停止豆包画布任务'});
+    }catch(error){
+      notify('停止豆包画布任务失败：'+(error as Error).message);
+    }
+  },[update,notify]);
   const expand = useCallback((id:string) => { setPreview(id); },[]);
   const inspect = useCallback((id:string) => {
     setNodes(prev=>prev.map(n=>({...n,selected:n.id===id})));
     setPanel('inspector');
   },[setNodes]);
   const actions=useMemo(()=>({
-    update,generate,addAfter,addBefore,uploadFor,extractLastFrame,
+    update,generate,cancelCanvasJob,addAfter,addBefore,uploadFor,extractLastFrame,
     openFrameEditor,duplicate,remove,expand,inspect,
     openNodeMenu:(id:string,side:'source'|'target',x:number,y:number)=>openNodeMenu(id,side,x,y),
     accounts:doubaoAccounts,museAccounts,chatgptAccounts,
@@ -1243,7 +1324,7 @@ function Workspace() {
     openH3Settings:()=>setPanel('h3'),
     openChatGPTSettings:()=>setPanel('chatgpt'),
     openAccountBrowser,openMuseAccountBrowser
-  }),[update,generate,addAfter,addBefore,openNodeMenu,uploadFor,extractLastFrame,
+  }),[update,generate,cancelCanvasJob,addAfter,addBefore,openNodeMenu,uploadFor,extractLastFrame,
     openFrameEditor,duplicate,remove,
     expand,inspect,doubaoAccounts,museAccounts,chatgptAccounts,
     referencesFor,reorderReferences,
@@ -1925,10 +2006,12 @@ function Workspace() {
                   aria-label="节点生成服务"
                   value={selected.data.provider||'doubao'}
                   onChange={e=>{
-                    const provider=e.target.value as 'doubao'|'muse'|'h3';
+                    const provider=e.target.value as 'doubao'|'doubao-canvas'|'muse'|'h3';
                     update(selected.id,{provider,
                       ...(provider==='h3'?{
                         model:'h3-video',duration:'6s',resolution:'768p'
+                      }:provider==='doubao-canvas'?{
+                        model:doubaoCanvasModel,duration:'5s',resolution:'720p'
                       }:provider==='doubao'||provider==='muse'?{
                         model:defaultVideoModel,duration:'5s',resolution:'720p'
                       }:{}),
@@ -1937,10 +2020,12 @@ function Workspace() {
                         ?{duration:'10s'}:{})});
                   }}>
                     <option value="doubao">豆包生成</option>
+                    <option value="doubao-canvas">豆包画布</option>
                     <option value="muse">Muse 生成</option>
                     <option value="h3">元铂AI H3 API</option>
                 </select></label>}
               {selected.data.kind==='video'&&selected.data.provider!=='muse'&&
+                selected.data.provider!=='doubao-canvas'&&
                 <label>模型<select value={selected.data.model}
                   onChange={e=>update(selected.id,{model:e.target.value})}>
                   {selected.data.provider==='h3'
@@ -1955,10 +2040,12 @@ function Workspace() {
                 </select></label>}
               {selected.data.kind==='video'&&<label>时长<select value={selected.data.duration}
                 onChange={e=>update(selected.id,{duration:e.target.value})}>
-                {Array.from({length:selected.data.provider==='muse'?7:
-                  selected.data.provider==='h3'
-                    ?selected.data.model==='h3-video'?27:12:12},
-                  (_,i)=>(i+4)+'s').map(x=><option key={x}>{x}</option>)}
+                {(selected.data.provider==='doubao-canvas'
+                  ?[4,5,8,10,15].map(n=>n+'s')
+                  :Array.from({length:selected.data.provider==='muse'?7:
+                    selected.data.provider==='h3'
+                      ?selected.data.model==='h3-video'?27:12:12},
+                    (_,i)=>(i+4)+'s')).map(x=><option key={x}>{x}</option>)}
               </select></label>}
               {selected.data.kind==='video'&&selected.data.provider==='h3'&&<>
                 <label>H3 视频分辨率<select

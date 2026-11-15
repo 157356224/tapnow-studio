@@ -8,11 +8,15 @@ export const h3VideoModelOptions=[
 ] as const;
 export const models = {
   image: ['Seedream 5.0 Lite', 'Banana Pro', 'GPT Image', 'Seedream 5.0', 'FLUX.2', 'Imagen 4'],
-  video: ['Seedance 2.0 Mini', 'Seedance 2.0 Fast',...h3VideoModels],
+  video: ['Seedance 2.0 Mini', 'Seedance 2.0 Fast','seedance_v2.0',...h3VideoModels],
   text: ['Gemini 3.1 Flash Lite', 'Text Editor'],
   audio: ['Music / Voice', 'ElevenLabs', 'MiniMax Audio']
 };
 export const defaultVideoModel='Seedance 2.0 Mini';
+export const doubaoCanvasModel='seedance_v2.0';
+export const doubaoCanvasVideoOptions=[
+  {name:doubaoCanvasModel,resolution:'',duration:'4/5/8/10/15S',audio:false}
+] as const;
 export const supportedDoubaoVideoModels=['Seedance 2.0 Mini','Seedance 2.0 Fast'] as const;
 export function normalizeVideoNodes(nodes:StudioNode[]):StudioNode[]{
   return nodes.map(node=>{
@@ -20,11 +24,13 @@ export function normalizeVideoNodes(nodes:StudioNode[]):StudioNode[]{
       return {...node,data:{...node.data,provider:'muse'}};
     if(node.data.kind==='video'){
       const wantsH3=node.data.provider==='h3';
-      const valid=wantsH3
+      const wantsCanvas=node.data.provider==='doubao-canvas';
+      const valid=wantsCanvas?node.data.model===doubaoCanvasModel:wantsH3
         ?h3VideoModels.some(model=>model===node.data.model)
         :supportedDoubaoVideoModels.some(model=>model===node.data.model);
       if(!valid&&node.data.provider!=='muse')
-        return {...node,data:{...node.data,model:wantsH3?'h3-video':defaultVideoModel,
+        return {...node,data:{...node.data,model:wantsCanvas?doubaoCanvasModel:
+          wantsH3?'h3-video':defaultVideoModel,
           ...(wantsH3?{resolution:node.data.resolution||'768p',duration:'6s'}:{})}};
     }
     return node;

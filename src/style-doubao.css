@@ -60,6 +60,11 @@
 .tn-reference-options button small{font-size:9px;color:#adbbbd}
 .tn-reference-options p{font-size:11px;line-height:1.6;color:#acafbb;padding:6px;margin:0}
 .tn-job-caption{color:#999dab;font-size:10px;line-height:1.5;padding-top:4px;max-height:38px;overflow:auto}
+.tn-canvas-generation-logs{font-size:10px;color:#aaaebd;margin-top:2px;max-width:100%}
+.tn-canvas-generation-logs summary{cursor:pointer;user-select:none}
+.tn-canvas-generation-logs pre{white-space:pre-wrap;overflow:auto;max-height:110px;
+  font-family:inherit;font-size:10px;line-height:1.5;padding:5px 8px;
+  border-radius:6px;background:#17181e;margin:3px 0 0}
 @media(max-width:850px){.tn-video .floating-compose{width:min(746px,94vw)}.tn-video .tn-compose-footer{gap:4px}}
 
 /* Model selector: compact dark provider list, metadata chips and selection. */

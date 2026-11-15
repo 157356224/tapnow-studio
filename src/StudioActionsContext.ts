@@ -7,6 +7,7 @@ import type {ChatGPTAccount} from './chatgpt';
 type Actions={
   update:(id:string,patch:Partial<StudioNodeData>)=>void;
   generate:(id:string,kind?:Kind)=>void;
+  cancelCanvasJob:(id:string)=>Promise<void>;
   addAfter:(id:string,kind:Kind)=>void;
   addBefore:(id:string,kind:Kind)=>void;
   openNodeMenu:(id:string,side:'source'|'target',x:number,y:number)=>void;

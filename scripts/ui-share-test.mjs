@@ -113,6 +113,7 @@ localApp.get('/api/muse/accounts',(_req,res)=>res.json([
 ]));
 localApp.get('/api/health',(_req,res)=>res.json({
   museBridgeRevision:'quota-auto-v6-image-resolution',
+  doubaoCanvasRevision:'single-anonymous-v1',
   museMediaRevision:'fresh-chat-media-v2',audioReferenceRevision:'mixed-media-v1',
   multiImageUploadRevision:'v3-prompt-first',
   videoModelRevision:'mini-fast-v1',videoStartRevision:'reply-prefix-v1',
@@ -121,6 +122,7 @@ localApp.get('/api/health',(_req,res)=>res.json({
 }));
 let localMuseJobs=0;
 let localDoubaoJobs=0;
+let localCanvasJobs=0;
 localApp.post('/api/muse/jobs',(req,res)=>{
   assert.equal(req.body.accountId,'user2-account');
   assert.ok(localProjects.some(p=>p.id===req.body.projectId&&p.hiddenGuestJob));
@@ -140,6 +142,29 @@ localApp.post('/api/doubao/jobs',(req,res)=>{
 localApp.get('/api/doubao/jobs/user2-video',(_req,res)=>res.json({
   id:'user2-video',status:'completed',progress:100,
   videoUrl:'/api/uploads/guest-produced.mp4',message:'本机视频完成'
+}));
+localApp.post('/api/doubao-canvas/jobs',(req,res)=>{
+  assert.equal(req.body.prompt,'local video');
+  assert.equal(req.body.duration,'5s');
+  assert.equal(req.body.ratio,'16:9');
+  assert.equal(req.body.accountId,undefined,
+    'Anonymous Doubao Canvas must never use host account IDs');
+  assert.equal(req.body.resolution,undefined,
+    'Doubao Canvas must not include resolution selection');
+  assert.deepEqual(req.body.references,[]);
+  assert.ok(localProjects.some(p=>p.id===req.body.projectId&&p.hiddenGuestJob),
+    'Doubao Canvas runs against User2 local mirror');
+  localCanvasJobs++;
+  res.status(201).json({id:'user2-canvas-job',status:'queued',
+    message:'本机豆包画布任务'});
+});
+localApp.get('/api/doubao-canvas/jobs/user2-canvas-job',(_req,res)=>res.json({
+  id:'user2-canvas-job',status:'completed',progress:100,
+  videoUrl:'/api/uploads/guest-produced.mp4',message:'本机豆包画布完成',
+  steps:[
+    {at:'2026-11-16T00:00:00Z',message:'正在启动豆包画布',progress:10},
+    {at:'2026-11-16T00:01:00Z',message:'下载视频完成',progress:100}
+  ]
 }));
 localApp.get('/api/muse/quotas',(_req,res)=>res.json({
   rows:[],totalAccounts:0,knownAccounts:0,unknownAccounts:0,
@@ -345,6 +370,35 @@ try{
     /^\/api\/uploads\/[0-9a-f-]+\.mp4$/,JSON.stringify(generatedVideo.data));
   assert.equal(generatedVideo.data.accountId,'host-doubao-id');
   assert.equal(localDoubaoJobs,1,'User2 video must use their local API');
+  // Switch the visible shared video node from authenticated Doubao to the
+  // new anonymous Canvas mode, then regenerate using User2's local service.
+  const previousVideoUrl=generatedVideo.data.mediaUrl;
+  await guest.getByRole('group',{name:'生成服务'}).getByRole('button',{
+    name:'豆包画布'
+  }).click();
+  await guest.getByRole('button',{name:'使用豆包画布生成视频'}).waitFor();
+  assert.equal(await guest.getByRole('combobox',{name:'视频生成账号'}).count(),0,
+    'Doubao Canvas should not require a browser account');
+  for(let attempt=0;attempt<40&&
+    read()[0].nodes.find(n=>n.id==='guest-video').data.provider!=='doubao-canvas';
+    attempt++)await new Promise(resolve=>setTimeout(resolve,100));
+  assert.equal(read()[0].nodes.find(n=>n.id==='guest-video').data.provider,
+    'doubao-canvas','Guest provider selection should sync to User1');
+  await guest.getByRole('button',{name:'使用豆包画布生成视频'}).click();
+  for(let attempt=0;attempt<120&&
+    read()[0].nodes.find(n=>n.id==='guest-video').data.mediaUrl===previousVideoUrl;attempt++)
+    await new Promise(resolve=>setTimeout(resolve,150));
+  const resultCanvas=read()[0].nodes.find(n=>n.id==='guest-video');
+  assert.match(resultCanvas.data.mediaUrl||'',
+    /^\/api\/uploads\/[0-9a-f-]+\.mp4$/,JSON.stringify({
+      data:resultCanvas.data,localCanvasJobs,errors
+    }));
+  assert.equal(localCanvasJobs,1,'Guest must submit Canvas job to User2 local API');
+  assert.equal(resultCanvas.data.status,'done');
+  assert.deepEqual(resultCanvas.data.jobLogs,['正在启动豆包画布','下载视频完成']);
+  assert.deepEqual(
+    fs.readFileSync(path.join(hostUploads,path.basename(resultCanvas.data.mediaUrl))),
+    fs.readFileSync(path.join(localUploads,'guest-produced.mp4')));
   // LAN HTTP is not a secure context (unlike localhost). Verify the actual
   // network guest can boot without crypto.randomUUID().
   const links=await host.evaluate(async()=>
@@ -369,7 +423,7 @@ try{
     await lanGuest.close();
   }
   assert.deepEqual(errors,[]);
-  console.log('PASS: local guest Muse image + Doubao video generation, own accounts, host media, live sync and locks');
+  console.log('PASS: local guest Muse + Doubao video + Doubao Canvas generation, host media, live sync and locks');
 }finally{
   // Do not leave a deliberately broken HTML file if the assertion fails.
   if(originalIndex&&fs.existsSync(indexFile)&&
