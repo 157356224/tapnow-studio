@@ -174,6 +174,7 @@ Windows 首次使用需要安装 Node.js 22.12+（推荐 24 LTS）、Git 和 Mic
 
 1. 先关闭占用 3701/3702/5173 的旧服务，再运行 `scripts/bootstrap.mjs`；每次联网读取 GitHub 远程分支的实际提交 ID，并与本地 HEAD 比对。正常快进只更新发生变化的源码文件。
 2. 对比 `package-lock.json` 的 SHA-256 和当前机器的 Node 主版本；首次启动或依赖变化时自动运行 `npm ci` 下载依赖，其余启动复用现有 `node_modules`。
+   如果本地版本包含尚未推送到 GitHub 的新提交，启动器会保留本地新版，不再被旧版远端 main 覆盖。
 3. 本地已跟踪文件存在修改时先保存到 Git stash，再更新到 GitHub 版本；本地提交与远程分叉时先建立 `tapnow-backup/*` 备份分支，再切换到远程版本。可用 `git stash list` 和 `git branch --list 'tapnow-backup/*'` 查看备份。与新版本文件重名的未跟踪文件备份在 `server/data/tapnow-update-backups/`。
 4. GitHub 检查失败会明确打印网络/鉴权错误，不会误报「已是最新版」。依赖安装失败会恢复旧依赖并尝试回滚源码。本地 `server/data/`（浏览器资料、账号、登录状态、项目）与 `server/uploads/`（生成媒体）始终在 `.gitignore` 中，不上传、不被 Git 更新覆盖。
 

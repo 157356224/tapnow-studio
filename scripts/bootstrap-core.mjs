@@ -94,6 +94,15 @@ export function syncGit({root,runGit=git,log=console.log}){
     log('[TapNow Update] GitHub 已确认相同提交，无须更新源码');
     return {updated:false,skipped:'current'};
   }
+  // Preserve commits that are ahead of GitHub (e.g. a new feature awaiting
+  // upload): startup must never downgrade the working tree to an older main.
+  if(old.output!==latest.output&&
+     runGit(root,['merge-base','--is-ancestor',latest.output,old.output]).ok){
+    log('[TapNow Update] 本地包含尚未推送的更新（'+old.output.slice(0,12)+
+      '），GitHub 仍在旧版本（'+latest.output.slice(0,12)+
+      '）；保留本地版本，不执行回退');
+    return {updated:false,skipped:'local-ahead'};
+  }
   let backupStash=null;
   if(dirty.output){
     const stamp=new Date().toISOString().replace(/[^\d]/g,'');

@@ -86,6 +86,13 @@ try{
   call(local,['add','changed.txt']);
   call(local,['commit','-m','Local experiment']);
   const localCommit=call(local,['rev-parse','HEAD']);
+  const ahead=syncGit({root:local,log:quiet});
+  assert.equal(ahead.updated,false);
+  assert.equal(ahead.skipped,'local-ahead',
+    'Startup must not reset new local commits to older GitHub main');
+  assert.equal(call(local,['rev-parse','HEAD']),localCommit);
+  assert.equal(fs.readFileSync(path.join(local,'changed.txt'),'utf8'),
+    'local committed experiment');
   write(publisher,'changed.txt','version-four');
   call(publisher,['add','.']);
   call(publisher,['commit','-m','Version four']);
