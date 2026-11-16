@@ -18,6 +18,7 @@ const project={
   edges:[{id:'a-v',source:'a',target:'video'},{id:'b-v',source:'b',target:'video'}]
 };
 const submitted=[];
+const canvasSubmitted=[];
 const browser=await chromium.launch({channel:'msedge',headless:true});
 const page=await browser.newPage({viewport:{width:1880,height:1200}});
 const errors=[];
@@ -43,6 +44,7 @@ try{
       return json(project);
     }
     if(url.pathname==='/api/health')return json({
+      doubaoCanvasRevision:'single-anonymous-v1',
       referenceSelectionRevision:'at-order-v2',
       multiImageUploadRevision:'v3-prompt-first',
       videoModelRevision:'mini-fast-v1',
@@ -57,6 +59,16 @@ try{
       }
       return json({id:'mention-test-job',status:'needs-attention',error:'测试到此停止'});
     }
+    if(url.pathname==='/api/doubao/jobs/mention-test-job')
+      return json({id:'mention-test-job',status:'needs-attention',
+        error:'测试到此停止'});
+    if(url.pathname==='/api/doubao-canvas/jobs'){
+      canvasSubmitted.push(request.postDataJSON());
+      return json({id:'canvas-mention-job',status:'queued',message:'已排队'},201);
+    }
+    if(url.pathname==='/api/doubao-canvas/jobs/canvas-mention-job')
+      return json({id:'canvas-mention-job',status:'completed',progress:100,
+        videoUrl:'/api/uploads/canvas-reference.mp4',message:'模拟完成'});
     if(url.pathname==='/api/muse/accounts')return json([]);
     if(url.pathname==='/api/muse/quotas')return json({totalAccounts:0,knownAccounts:0,
       unknownAccounts:0,totalCapacity:0,measuredCapacity:0,totalUsed:0,
@@ -136,8 +148,22 @@ try{
   const middle=await editor.evaluate(el=>el.innerText);
   assert.ok(!middle.includes('@图片125'),'原有空格前的文字也不能与图片引用编号合并');
   assert.ok(middle.includes('后半句'));
+  // Switching to anonymous Canvas generation must retain @ selection and
+  // submit only the specifically cited image, not every connected image.
+  await page.waitForFunction(()=>document.querySelector('.tn-job-caption')
+    ?.textContent?.includes('测试到此停止'),null,{timeout:10000});
+  await editor.fill('让 @图片2 变成动画');
+  await page.getByRole('group',{name:'生成服务'})
+    .getByRole('button',{name:'豆包画布'}).click();
+  await page.getByRole('button',{name:'使用豆包画布生成视频'}).click();
+  for(let i=0;i<40&&!canvasSubmitted.length;i++)
+    await page.waitForTimeout(100);
+  assert.equal(canvasSubmitted.length,1,'Canvas mention must reach local API');
+  assert.equal(canvasSubmitted[0].prompt,'让 @图片2 变成动画');
+  assert.deepEqual(canvasSubmitted[0].references,[{id:'b'}],
+    'Only @图片2 may be uploaded for Canvas generation');
   assert.equal(errors.length,0,errors.join(' | '));
-  console.log('PASS: IME @ popup, repeated mentions, no number token merging, send preserves selected references');
+  console.log('PASS: @ picker, repeated image mentions, Canvas image-only references, send preserves chips');
 }finally{
   await browser.close();
 }

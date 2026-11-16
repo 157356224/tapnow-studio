@@ -16,6 +16,10 @@ const image=Buffer.from(
   'base64');
 const source=path.join(uploadDir,crypto.randomUUID()+'.png');
 fs.writeFileSync(source,image);
+const source2=path.join(uploadDir,crypto.randomUUID()+'.png');
+const source3=path.join(uploadDir,crypto.randomUUID()+'.png');
+fs.writeFileSync(source2,image);
+fs.writeFileSync(source3,image);
 const mockVideo=Buffer.from('000000186674797069736f6d0000020069736f6d6d703431','hex');
 const json=data=>new Response(JSON.stringify(data),{status:200,
   headers:{'content-type':'application/json'}});
@@ -146,8 +150,14 @@ try{
     {id:'video',data:{kind:'video',provider:'doubao-canvas',
       prompt:'生成 @图片1',ratio:'9:16',duration:'8s'}},
     {id:'cancel',data:{kind:'video',provider:'doubao-canvas',
-      prompt:'取消测试',ratio:'9:16',duration:'8s'}}
-  ],edges:[{source:'image',target:'video'}]}];
+      prompt:'取消测试',ratio:'9:16',duration:'8s'}},
+    {id:'image-second',data:{kind:'image',title:'第二张',mediaUrl:'/api/uploads/'+
+      path.basename(source2)}},
+    {id:'image-third',data:{kind:'image',title:'第三张',mediaUrl:'/api/uploads/'+
+      path.basename(source3)}}
+  ],edges:[{source:'image',target:'video'},
+    {source:'image-second',target:'video'},
+    {source:'image-third',target:'video'}]}];
   const payloads=[];
   const bridge=mountDoubaoCanvasRoutes(app,()=>structuredClone(projects),
     value=>{projects=structuredClone(value);},{
@@ -190,9 +200,33 @@ try{
     'Canvas jobs should persist their generation log');
   assert.match(bridge.jobs.get(job.id).steps.at(-1).message,/已保存/);
   assert.equal(payloads[0].images[0],source);
+  assert.equal(payloads[0].prompt,'生成 {{ref:1}}');
   assert.match(projects[0].nodes[1].data.mediaUrl,/^\/api\/uploads\/.*\.mp4$/);
   assert.equal(projects[0].nodes[1].data.status,'done');
   assert.ok(projects[0].nodes[1].data.jobLogs.length>=2);
+  const multi=await post({projectId:'project-1',nodeId:'video',
+    prompt:'先看 @图片3，再看 @图片2，重复 @图片3',duration:'8s',
+    ratio:'9:16',references:[{id:'image-second'},{id:'image-third'}]});
+  assert.equal(multi.status,201);
+  const multiJob=await multi.json();
+  for(let i=0;i<80&&bridge.jobs.get(multiJob.id)?.status!=='completed';i++)
+    await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(bridge.jobs.get(multiJob.id).status,'completed');
+  assert.deepEqual(payloads[1].images,[source2,source3]);
+  assert.equal(payloads[1].prompt,
+    '先看 {{ref:2}}，再看 {{ref:1}}，重复 {{ref:2}}');
+  assert.equal(projects[0].nodes[1].data.prompt,'生成 @图片1',
+    'Remote placeholders must not overwrite editor text');
+  const singleSecond=await post({projectId:'project-1',nodeId:'video',
+    prompt:'只用 @图片2',duration:'8s',ratio:'9:16',
+    references:[{id:'image-second'}]});
+  assert.equal(singleSecond.status,201);
+  const singleSecondJob=await singleSecond.json();
+  for(let i=0;i<80&&bridge.jobs.get(singleSecondJob.id)?.status!=='completed';i++)
+    await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(bridge.jobs.get(singleSecondJob.id).status,'completed');
+  assert.deepEqual(payloads[2].images,[source2]);
+  assert.equal(payloads[2].prompt,'只用 {{ref:1}}');
   const stopped=await post({projectId:'project-1',nodeId:'cancel',
     prompt:'取消测试',duration:'8s',ratio:'9:16',references:[]});
   assert.equal(stopped.status,201);

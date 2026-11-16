@@ -33,7 +33,14 @@ function parseJobInput(body,read,uploadDir){
     if(!filename)throw new Error(ref.token+' 图片未保存在本机，请重新上传');
     return filename;
   });
-  return {projectId:project.id,nodeId:node.id,prompt,duration,ratio,files};
+  // The editor numbers all connected images. The Canvas API only numbers
+  // uploaded images, so remap sparse/repeated @图片N references to the actual
+  // {{ref:N}} placeholders used by the selected attachments.
+  const slots=new Map(references.map((ref,index)=>[ref.token,index+1]));
+  const canvasPrompt=prompt.replace(/@图片\d+/g,token=>
+    '{{ref:'+slots.get(token)+'}}');
+  return {projectId:project.id,nodeId:node.id,prompt:canvasPrompt,
+    duration,ratio,files};
 }
 
 export function mountDoubaoCanvasRoutes(app,read,write,{

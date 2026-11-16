@@ -144,16 +144,23 @@ localApp.get('/api/doubao/jobs/user2-video',(_req,res)=>res.json({
   videoUrl:'/api/uploads/guest-produced.mp4',message:'本机视频完成'
 }));
 localApp.post('/api/doubao-canvas/jobs',(req,res)=>{
-  assert.equal(req.body.prompt,'local video');
+  assert.match(req.body.prompt,/local video.*@图片1/);
   assert.equal(req.body.duration,'5s');
   assert.equal(req.body.ratio,'16:9');
   assert.equal(req.body.accountId,undefined,
     'Anonymous Doubao Canvas must never use host account IDs');
   assert.equal(req.body.resolution,undefined,
     'Doubao Canvas must not include resolution selection');
-  assert.deepEqual(req.body.references,[]);
+  assert.deepEqual(req.body.references,[{id:'guest-image'}]);
   assert.ok(localProjects.some(p=>p.id===req.body.projectId&&p.hiddenGuestJob),
     'Doubao Canvas runs against User2 local mirror');
+  const mirrored=localProjects.find(p=>p.id===req.body.projectId);
+  const sourceImage=mirrored.nodes.find(node=>node.id==='guest-image');
+  const imported=sourceImage?.data?.mediaUrl||'';
+  assert.match(imported,/^\/api\/uploads\/[0-9a-f-]+\.png$/,
+    'Guest mirror must import referenced host image into User2 local uploads');
+  assert.deepEqual(fs.readFileSync(path.join(localUploads,path.basename(imported))),
+    fs.readFileSync(path.join(localUploads,'guest-produced.png')));
   localCanvasJobs++;
   res.status(201).json({id:'user2-canvas-job',status:'queued',
     message:'本机豆包画布任务'});
@@ -348,6 +355,8 @@ try{
       model:'Seedance 2.0 Mini',accountId:'host-doubao-id',
       prompt:'local video',duration:'5s',status:'idle'}
   });
+  videoCanvas.edges.push({id:'guest-image-to-video',
+    source:'guest-image',target:'guest-video'});
   const videoInjected=await fetch('http://127.0.0.1:'+
     server.address().port+'/api/share/patch',{
     method:'POST',headers:{'content-type':'application/json'},
@@ -377,6 +386,8 @@ try{
     name:'豆包画布'
   }).click();
   await guest.getByRole('button',{name:'使用豆包画布生成视频'}).waitFor();
+  await guest.getByRole('button',{name:'引用@图片1'}).click();
+  await guest.locator('.tn-inline-ref[data-token="@图片1"]').first().waitFor();
   assert.equal(await guest.getByRole('combobox',{name:'视频生成账号'}).count(),0,
     'Doubao Canvas should not require a browser account');
   for(let attempt=0;attempt<40&&
